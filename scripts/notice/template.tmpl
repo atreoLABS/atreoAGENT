@@ -1,0 +1,47 @@
+{{- /*
+NOTICE template for atreoAGENT — consumed by go.elastic.co/go-licence-detector.
+Regenerate with `make notice`. Do not hand-edit NOTICE; edit this template instead.
+*/ -}}
+atreoAGENT
+Copyright 2026 Atreo Labs Ltd
+
+This product includes software developed at Atreo Labs Ltd
+(https://atreolabs.com/).
+
+Licensed under the Apache License, Version 2.0 (the "LICENSE" file
+in this repository). You may obtain a copy of the licence at
+https://www.apache.org/licenses/LICENSE-2.0.
+
+------------------------------------------------------------------------
+Third-party notices
+------------------------------------------------------------------------
+
+This software depends on the following third-party open-source
+components. Each retains its own licence and copyright as published by
+its respective author; the notices below are reproduced for attribution.
+See each component's repository for the full licence text.
+
+Direct dependencies:
+
+{{ range .Direct }}  - {{ printf "%-37s" .Name }} ({{ .LicenceType }})
+{{ end }}
+Indirect dependencies:
+
+{{ range .Indirect }}  - {{ printf "%-37s" .Name }} ({{ .LicenceType }})
+{{ end }}
+gopkg.in/yaml.v3 ships an upstream NOTICE attributing portions of the
+work to Canonical Ltd:
+
+  Copyright 2011-2016 Canonical Ltd.
+
+The Docker image additionally bundles the following Alpine Linux packages
+at runtime; each carries its own upstream licence:
+
+  - ca-certificates  (MPL-2.0 with various sub-component licences)
+  - iproute2         (GPL-2.0-or-later)
+  - iptables         (GPL-2.0-or-later)
+  - wireguard-tools  (GPL-2.0-or-later)
+
+These tools are invoked as system commands from the Docker image and are
+not linked into the atreoAGENT binary; atreoAGENT itself is statically
+built and contains no GPL-licensed code.

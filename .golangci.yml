@@ -1,0 +1,9 @@
+# golangci-lint v2 config. The CI action pins a matching version so a new
+# upstream release can't change which linters run out from under a green
+# build. Omitting `linters.default` keeps the standard set (errcheck, govet,
+# ineffassign, staticcheck, unused); misspell is added on top.
+version: "2"
+
+linters:
+  enable:
+    - misspell

@@ -1,0 +1,75 @@
+atreoAGENT
+Copyright 2026 Atreo Labs Ltd
+
+This product includes software developed at Atreo Labs Ltd
+(https://atreolabs.com/).
+
+Licensed under the Apache License, Version 2.0 (the "LICENSE" file
+in this repository). You may obtain a copy of the licence at
+https://www.apache.org/licenses/LICENSE-2.0.
+
+------------------------------------------------------------------------
+Third-party notices
+------------------------------------------------------------------------
+
+This software depends on the following third-party open-source
+components. Each retains its own licence and copyright as published by
+its respective author; the notices below are reproduced for attribution.
+See each component's repository for the full licence text.
+
+Direct dependencies:
+
+  - filippo.io/edwards25519               (BSD-3-Clause)
+  - github.com/coder/websocket            (ISC)
+  - github.com/emersion/go-sasl           (MIT)
+  - github.com/emersion/go-smtp           (MIT)
+  - github.com/go-acme/lego/v4            (MIT)
+  - github.com/huin/goupnp                (BSD-2-Clause)
+  - github.com/jackpal/go-nat-pmp         (Apache-2.0)
+  - github.com/jhillyerd/enmime/v2        (MIT)
+  - golang.org/x/crypto                   (BSD-3-Clause)
+  - golang.org/x/sys                      (BSD-3-Clause)
+  - gopkg.in/yaml.v3                      (MIT + Apache-2.0)
+
+Indirect dependencies:
+
+  - github.com/cenkalti/backoff/v5        (MIT)
+  - github.com/cention-sany/utf7          (BSD-3-Clause)
+  - github.com/cespare/xxhash/v2          (MIT)
+  - github.com/clipperhouse/displaywidth  (MIT)
+  - github.com/clipperhouse/uax29/v2      (MIT)
+  - github.com/fatih/color                (MIT)
+  - github.com/go-jose/go-jose/v4         (Apache-2.0)
+  - github.com/goccy/go-json              (MIT)
+  - github.com/gogs/chardet               (MIT)
+  - github.com/inbucket/html2text         (MIT)
+  - github.com/mattn/go-colorable         (MIT)
+  - github.com/mattn/go-isatty            (MIT)
+  - github.com/mattn/go-runewidth         (MIT)
+  - github.com/miekg/dns                  (BSD-3-Clause)
+  - github.com/olekukonko/cat             (MIT)
+  - github.com/olekukonko/errors          (MIT)
+  - github.com/olekukonko/ll              (MIT)
+  - github.com/olekukonko/tablewriter     (MIT)
+  - github.com/pkg/errors                 (BSD-2-Clause)
+  - github.com/ssor/bom                   (MIT)
+  - golang.org/x/net                      (BSD-3-Clause)
+  - golang.org/x/sync                     (BSD-3-Clause)
+  - golang.org/x/text                     (BSD-3-Clause)
+
+gopkg.in/yaml.v3 ships an upstream NOTICE attributing portions of the
+work to Canonical Ltd:
+
+  Copyright 2011-2016 Canonical Ltd.
+
+The Docker image additionally bundles the following Alpine Linux packages
+at runtime; each carries its own upstream licence:
+
+  - ca-certificates  (MPL-2.0 with various sub-component licences)
+  - iproute2         (GPL-2.0-or-later)
+  - iptables         (GPL-2.0-or-later)
+  - wireguard-tools  (GPL-2.0-or-later)
+
+These tools are invoked as system commands from the Docker image and are
+not linked into the atreoAGENT binary; atreoAGENT itself is statically
+built and contains no GPL-licensed code.

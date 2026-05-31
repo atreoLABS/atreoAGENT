@@ -1,0 +1,40 @@
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Agent harness state (Claude Code, Codex, etc.)
+.claude/
+.codex/
+
+# Build artefacts
+/atreoagent
+/upnptest
+*.exe
+*.test
+*.out
+coverage.out
+coverage.html
+/dist/
+
+# Runtime data — docker-compose mounts ./data:/var/lib/atreoagent, which
+# generates the agent's long-lived identity key, WG keys, ACL store,
+# admin pin, etc. NEVER commit any of this.
+/data/
+/var/
+
+# Secrets — defensive; none belong in this repo
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.crt
+*.p12
+*.pfx

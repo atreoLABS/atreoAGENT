@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Build / vet / test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          cache: false
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: NOTICE up to date
+        run: make notice-check
+
+      - name: Test (race)
+        run: go test -race ./...
+
+      - name: Coverage (excludes cmd/* per Makefile convention)
+        run: make coverage
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: code-coverage
+          path: coverage.out
+          if-no-files-found: error
+
+  coverage_report:
+    name: Coverage report
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    needs: go
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+    steps:
+      - uses: fgrosse/go-coverage-report@v1.3.0
+        with:
+          coverage-artifact-name: code-coverage
+          coverage-file-name: coverage.out
+          root-package: github.com/atreoLABS/atreoAGENT
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          cache: false
+
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2

@@ -1,0 +1,24 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      # All non-breaking Go module bumps land in one PR per week.
+      # Major bumps still get their own PR (default behavior).
+      go-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      # Action version bumps are almost always safe; group everything,
+      # including majors, since CI itself catches breakage.
+      actions:
+        patterns:
+          - "*"

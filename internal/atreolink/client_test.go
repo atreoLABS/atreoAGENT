@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -169,7 +170,7 @@ func TestUpdateEndpoint(t *testing.T) {
 	defer ts.Close()
 
 	c := NewClient(ts.URL, km, deviceID)
-	results, err := c.UpdateEndpoint(context.Background(), "1.2.3.4")
+	results, err := c.UpdateEndpoint(context.Background(), "1.2.3.4", nil)
 	if err != nil {
 		t.Fatalf("UpdateEndpoint: %v", err)
 	}
@@ -213,7 +214,7 @@ func TestUpdateEndpoint_NoOverrideOmitsIP(t *testing.T) {
 	// returns the v4 result (empty body / 204 → zero EndpointResult) and
 	// logs the v6 failure as a warning.
 	c := NewClient(ts.URL, km, deviceID)
-	results, err := c.UpdateEndpoint(context.Background(), "")
+	results, err := c.UpdateEndpoint(context.Background(), "", nil)
 	if err != nil {
 		t.Fatalf("UpdateEndpoint: %v", err)
 	}
@@ -260,7 +261,7 @@ func TestDNSPresentCleanup(t *testing.T) {
 // server-side anyway.
 func TestAuthPost_RequiresPairing(t *testing.T) {
 	c := NewClient("http://example.invalid", testKeyManager(t), "")
-	if _, err := c.UpdateEndpoint(context.Background(), "1.2.3.4"); err == nil {
+	if _, err := c.UpdateEndpoint(context.Background(), "1.2.3.4", nil); err == nil {
 		t.Fatal("expected error when deviceID is empty")
 	}
 }
@@ -273,7 +274,7 @@ func TestHTTPError(t *testing.T) {
 	defer ts.Close()
 
 	c := NewClient(ts.URL, testKeyManager(t), "11111111-1111-1111-1111-111111111111")
-	_, err := c.UpdateEndpoint(context.Background(), "1.2.3.4")
+	_, err := c.UpdateEndpoint(context.Background(), "1.2.3.4", nil)
 	if err == nil {
 		t.Fatal("expected error for 500 response")
 	}
@@ -343,7 +344,7 @@ func TestUpdateEndpoint_FiresBothFamilies(t *testing.T) {
 	v6RT := &recordingRT{body: `{"hostname":"dev.example.com","ip":"2001:db8::1"}`}
 	installRoundTrippers(c, nil, v4RT, v6RT)
 
-	results, err := c.UpdateEndpoint(context.Background(), "")
+	results, err := c.UpdateEndpoint(context.Background(), "", nil)
 	if err != nil {
 		t.Fatalf("UpdateEndpoint: %v", err)
 	}
@@ -367,7 +368,7 @@ func TestUpdateEndpoint_PartialFailureV6(t *testing.T) {
 	v6RT := &recordingRT{err: fmt.Errorf("network unreachable")}
 	installRoundTrippers(c, nil, v4RT, v6RT)
 
-	results, err := c.UpdateEndpoint(context.Background(), "")
+	results, err := c.UpdateEndpoint(context.Background(), "", nil)
 	if err != nil {
 		t.Fatalf("expected nil err on partial failure, got %v", err)
 	}
@@ -387,7 +388,7 @@ func TestUpdateEndpoint_BothFailReturnsError(t *testing.T) {
 	v6RT := &recordingRT{err: fmt.Errorf("v6 dial refused")}
 	installRoundTrippers(c, nil, v4RT, v6RT)
 
-	_, err := c.UpdateEndpoint(context.Background(), "")
+	_, err := c.UpdateEndpoint(context.Background(), "", nil)
 	if err == nil {
 		t.Fatal("expected error when both families fail")
 	}
@@ -407,7 +408,7 @@ func TestUpdateEndpoint_OverrideUsesGeneralClientOnly(t *testing.T) {
 	v6RT := &recordingRT{}
 	installRoundTrippers(c, defRT, v4RT, v6RT)
 
-	results, err := c.UpdateEndpoint(context.Background(), "203.0.113.7")
+	results, err := c.UpdateEndpoint(context.Background(), "203.0.113.7", nil)
 	if err != nil {
 		t.Fatalf("UpdateEndpoint: %v", err)
 	}
@@ -434,7 +435,7 @@ func TestUpdateEndpoint_IndependentTimeouts(t *testing.T) {
 	installRoundTrippers(c, nil, v4RT, v6RT)
 
 	start := time.Now()
-	results, err := c.UpdateEndpoint(context.Background(), "")
+	results, err := c.UpdateEndpoint(context.Background(), "", nil)
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("expected nil err (v4 ok, v6 timeout treated as partial), got %v", err)
@@ -446,5 +447,42 @@ func TestUpdateEndpoint_IndependentTimeouts(t *testing.T) {
 	// for slow CI. The point of the test is that we don't wait 30 s.
 	if elapsed > 15*time.Second {
 		t.Errorf("UpdateEndpoint blocked %v — v4 result must not wait on hung v6", elapsed)
+	}
+}
+
+// familyDialer pins LocalAddr only when one is supplied — this is what forces
+// the v6 DDNS request onto a stable source address.
+func TestFamilyDialerBindsLocalAddr(t *testing.T) {
+	if d := familyDialer(nil); d.LocalAddr != nil {
+		t.Errorf("familyDialer(nil).LocalAddr = %v, want nil", d.LocalAddr)
+	}
+	src := &net.TCPAddr{IP: net.ParseIP("2001:db8::1")}
+	if d := familyDialer(src); d.LocalAddr != src {
+		t.Errorf("familyDialer(src).LocalAddr = %v, want %v", d.LocalAddr, src)
+	}
+}
+
+// A non-nil v6Source forces a per-call v6 client (source-bound), so the cached
+// v6 client — and any RoundTripper installed on it — is bypassed. v4 still
+// fires on its cached client and carries the result on its own.
+func TestUpdateEndpoint_V6SourceBypassesCachedClient(t *testing.T) {
+	km := testKeyManager(t)
+	c := NewClient("http://example.invalid", km, "11111111-1111-1111-1111-111111111111")
+	v4RT := &recordingRT{}
+	v6RT := &recordingRT{} // must not be called: v6Source rebuilds the client
+	installRoundTrippers(c, nil, v4RT, v6RT)
+
+	results, err := c.UpdateEndpoint(context.Background(), "", net.ParseIP("2001:db8::1"))
+	if err != nil {
+		t.Fatalf("UpdateEndpoint: %v", err)
+	}
+	if atomic.LoadInt32(&v4RT.calls) != 1 {
+		t.Errorf("v4 calls = %d, want 1", v4RT.calls)
+	}
+	if got := atomic.LoadInt32(&v6RT.calls); got != 0 {
+		t.Errorf("cached v6 client calls = %d, want 0 (source-bound client should replace it)", got)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result (v4 only; bound v6 dial to example.invalid fails), got %d: %+v", len(results), results)
 	}
 }

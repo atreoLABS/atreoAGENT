@@ -18,6 +18,7 @@ import (
 func init() {
 	ifaFlagTemporary = unix.IFA_F_TEMPORARY
 	ifaFlagDeprecated = unix.IFA_F_DEPRECATED
+	ifaFlagPermanent = unix.IFA_F_PERMANENT
 }
 
 // Interfaces returns the system's interface list with V6Flags populated from

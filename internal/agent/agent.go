@@ -243,7 +243,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	// Report immediately and independently of UPnP so the DDNS record
 	// exists before the first client connects. Dual-family: one report
 	// per IPv4/IPv6 socket so both A and AAAA land.
-	if results, err := a.atreolink.UpdateEndpoint(ctx, a.cfg.EndpointIP); err != nil {
+	if results, err := a.atreolink.UpdateEndpoint(ctx, a.cfg.EndpointIP, a.preferredV6Source()); err != nil {
 		logging.Error("ERROR: failed to report endpoint to atreoLINK: %v", err)
 	} else {
 		for _, res := range results {
@@ -545,7 +545,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			return nil
 		case <-ticker.C:
 			// Refresh DDNS every tick, independent of UPnP. Dual-family.
-			if results, err := a.atreolink.UpdateEndpoint(ctx, a.cfg.EndpointIP); err != nil {
+			if results, err := a.atreolink.UpdateEndpoint(ctx, a.cfg.EndpointIP, a.preferredV6Source()); err != nil {
 				logging.Error("ERROR: failed to refresh endpoint on atreoLINK: %v", err)
 			} else {
 				for _, res := range results {
@@ -682,6 +682,23 @@ func pairTokenHexShort(pub []byte) string {
 		return h[:16]
 	}
 	return h
+}
+
+// preferredV6Source picks the stable global IPv6 address to bind as the source
+// of the DDNS update, so atreoLINK records a routable AAAA instead of a privacy
+// temporary. Returns nil when a manual endpoint_ip override is set (binding is
+// irrelevant then) or when no stable address is found, leaving the kernel to
+// choose. Errors degrade to nil — a failed lookup shouldn't block the report.
+func (a *Agent) preferredV6Source() net.IP {
+	if a.cfg.EndpointIP != "" {
+		return nil
+	}
+	ip, err := endpoints.PreferredV6Source()
+	if err != nil {
+		logging.Debug("ddns: preferred v6 source lookup failed: %v", err)
+		return nil
+	}
+	return ip
 }
 
 // refreshV6Pinholes opens/renews IPv6 firewall pinholes for exactly the

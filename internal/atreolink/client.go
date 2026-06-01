@@ -222,8 +222,8 @@ func NewClient(baseURL string, km *crypto.KeyManager, deviceID string) *Client {
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-		httpClientV4: familyBoundClient("tcp4"),
-		httpClientV6: familyBoundClient("tcp6"),
+		httpClientV4: familyBoundClient("tcp4", nil),
+		httpClientV6: familyBoundClient("tcp6", nil),
 	}
 }
 
@@ -233,12 +233,13 @@ func NewClient(baseURL string, km *crypto.KeyManager, deviceID string) *Client {
 // ignore it; Happy Eyeballs cannot intervene because the resolver only
 // returns addresses of the chosen family. A dial failure (e.g.
 // ENETUNREACH on a v4-only host) surfaces fast.
-func familyBoundClient(family string) *http.Client {
-	dialer := &net.Dialer{
-		Timeout:   8 * time.Second,
-		KeepAlive: 30 * time.Second,
-		Resolver:  &net.Resolver{PreferGo: true},
-	}
+//
+// localAddr, when non-nil, pins the source address of the connection. The
+// dual-family DDNS update uses this to force the v6 source onto a stable
+// address so atreoLINK records that as the AAAA rather than the temporary
+// address the kernel would otherwise select.
+func familyBoundClient(family string, localAddr net.Addr) *http.Client {
+	dialer := familyDialer(localAddr)
 	transport := &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
 		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
@@ -253,6 +254,17 @@ func familyBoundClient(family string) *http.Client {
 	return &http.Client{
 		Timeout:   10 * time.Second,
 		Transport: transport,
+	}
+}
+
+// familyDialer builds the dialer used by familyBoundClient. localAddr, when
+// non-nil, pins the connection's source address.
+func familyDialer(localAddr net.Addr) *net.Dialer {
+	return &net.Dialer{
+		Timeout:   8 * time.Second,
+		KeepAlive: 30 * time.Second,
+		Resolver:  &net.Resolver{PreferGo: true},
+		LocalAddr: localAddr,
 	}
 }
 
@@ -299,7 +311,13 @@ type EndpointResult struct {
 // independent 10 s deadline so a hung family can't delay the other; an
 // at-least-one-success path returns successfully and logs the partial
 // failure as a warning. Both families failing is the only error.
-func (c *Client) UpdateEndpoint(ctx context.Context, ipOverride string) ([]EndpointResult, error) {
+//
+// v6Source, when non-nil, pins the source address of the v6 request to a
+// stable global address. Without it the kernel prefers an RFC 4941 privacy
+// temporary, so atreoLINK would record an AAAA that rotates away within hours.
+// It is rebuilt per call because the stable prefix can change across ISP lease
+// / SLAAC events.
+func (c *Client) UpdateEndpoint(ctx context.Context, ipOverride string, v6Source net.IP) ([]EndpointResult, error) {
 	if ipOverride != "" {
 		var r EndpointResult
 		if err := c.authPost(ctx, "device:endpoint", "/v1/device/endpoint",
@@ -313,9 +331,13 @@ func (c *Client) UpdateEndpoint(ctx context.Context, ipOverride string) ([]Endpo
 		label  string
 		client *http.Client
 	}
+	v6Client := c.httpClientV6
+	if v6Source != nil {
+		v6Client = familyBoundClient("tcp6", &net.TCPAddr{IP: v6Source})
+	}
 	attempts := []famAttempt{
 		{"v4", c.httpClientV4},
-		{"v6", c.httpClientV6},
+		{"v6", v6Client},
 	}
 
 	type famResult struct {

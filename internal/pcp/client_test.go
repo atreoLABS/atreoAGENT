@@ -14,9 +14,20 @@ import (
 func TestResultName(t *testing.T) {
 	cases := map[byte]string{
 		0:  "SUCCESS",
+		1:  "UNSUPP_VERSION",
 		2:  "NOT_AUTHORIZED",
+		3:  "MALFORMED_REQUEST",
+		4:  "UNSUPP_OPCODE",
+		5:  "UNSUPP_OPTION",
+		6:  "MALFORMED_OPTION",
+		7:  "NETWORK_FAILURE",
 		8:  "NO_RESOURCES",
+		9:  "UNSUPP_PROTOCOL",
+		10: "USER_EX_QUOTA",
+		11: "CANNOT_PROVIDE_EXTERNAL",
 		12: "ADDRESS_MISMATCH",
+		13: "EXCESSIVE_REMOTE_PEERS",
+		14: "UNKNOWN",
 		99: "UNKNOWN",
 	}
 	for code, want := range cases {

@@ -62,6 +62,40 @@ func TestPinholeNoncesMissingFileIsNoOp(t *testing.T) {
 	}
 }
 
+// Unparseable JSON and malformed entries are skipped, not fatal.
+func TestPinholeNoncesSkipsCorruptEntries(t *testing.T) {
+	good := pcp.Nonce{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
+	stored := map[string]string{
+		"2001:db8::1": hex.EncodeToString(good[:]), // valid → loaded
+		"2001:db8::2": "zzzz",                      // bad hex → skipped
+		"2001:db8::3": "0102",                      // wrong length → skipped
+		"not-an-ip":   hex.EncodeToString(good[:]), // bad IP → skipped
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pcp_nonces.json")
+	data, _ := json.Marshal(stored)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	c := NewClient(51820)
+	c.SetStatePath(path)
+	if len(c.v6pinholes) != 1 {
+		t.Fatalf("only the valid entry should load, got %d", len(c.v6pinholes))
+	}
+
+	// Garbage JSON must not panic or load anything.
+	bad := filepath.Join(dir, "bad.json")
+	if err := os.WriteFile(bad, []byte("{not json"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c2 := NewClient(51820)
+	c2.SetStatePath(bad)
+	if len(c2.v6pinholes) != 0 {
+		t.Fatalf("corrupt file should load nothing, got %d", len(c2.v6pinholes))
+	}
+}
+
 // An upgrade from the old v6_pinholes.json filename must keep live nonces.
 func TestPinholeNoncesMigratesLegacyFile(t *testing.T) {
 	dir := t.TempDir()

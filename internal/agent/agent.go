@@ -86,6 +86,7 @@ func New(cfg *config.Config) (*Agent, error) {
 	aclStore := acl.NewStore(cfg.ACLPath())
 	upnpClient := upnp.NewClient(cfg.WireGuard.ListenPort)
 	upnpClient.SetPCPEnabled(cfg.WireGuard.PCPEnabled)
+	upnpClient.SetStatePath(cfg.PinholePath())
 
 	// Registry keyed by bare hostname so the proxy can serve multiple
 	// wildcard certs at once — operator-issued plus optional custom-domain.

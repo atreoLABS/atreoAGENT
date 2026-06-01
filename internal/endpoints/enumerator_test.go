@@ -233,6 +233,58 @@ func TestEnumerateSkipsTemporaryV6(t *testing.T) {
 	}
 }
 
+func TestEnumeratePopulatesPermanentSubset(t *testing.T) {
+	// PublicV6Permanent is the IFA_F_PERMANENT subset of PublicV6 — the
+	// DDNS source binding prefers it so the AAAA lands on an address that
+	// won't rotate. The SLAAC stable address stays in PublicV6 as a fallback.
+	src := fakeSource{ifs: []Interface{
+		{
+			Name:  "eth0",
+			Index: 1,
+			Flags: net.FlagUp,
+			Addrs: []net.IPNet{
+				ipnet("2001:db8::1/64"),         // permanent
+				ipnet("2001:db8::2/64"),         // SLAAC stable
+				ipnet("2001:db8::dead:beef/64"), // privacy temporary
+			},
+			V6Flags: map[string]uint32{
+				"2001:db8::1":         ifaFlagPermanent,
+				"2001:db8::2":         0,
+				"2001:db8::dead:beef": ifaFlagTemporary,
+			},
+		},
+	}}
+	if ifaFlagPermanent == 0 || ifaFlagTemporary == 0 {
+		t.Skip("V6 flag data is a Linux-only feature; skipping on this platform")
+	}
+	res, _ := Enumerate(src, 1, "eth0")
+	if len(res.PublicV6) != 2 {
+		t.Fatalf("PublicV6 = %v, want the permanent + SLAAC stable addrs (temporary dropped)", res.PublicV6)
+	}
+	if len(res.PublicV6Permanent) != 1 || res.PublicV6Permanent[0].String() != "2001:db8::1" {
+		t.Errorf("PublicV6Permanent = %v, want [2001:db8::1]", res.PublicV6Permanent)
+	}
+}
+
+func TestPickPreferredV6(t *testing.T) {
+	perm := net.ParseIP("2001:db8::1")
+	slaacA := net.ParseIP("2001:db8::aaaa")
+	slaacB := net.ParseIP("2001:db8::bbbb")
+
+	// Permanent wins even when listed alongside stable addresses.
+	if got := pickPreferredV6([]net.IP{perm}, []net.IP{perm, slaacA}); !got.Equal(perm) {
+		t.Errorf("with permanent present: got %v, want %v", got, perm)
+	}
+	// No permanent → lowest stable address, deterministically.
+	if got := pickPreferredV6(nil, []net.IP{slaacB, slaacA}); !got.Equal(slaacA) {
+		t.Errorf("no permanent: got %v, want %v (lowest by byte order)", got, slaacA)
+	}
+	// Neither pool populated → nil, leaving source selection to the kernel.
+	if got := pickPreferredV6(nil, nil); got != nil {
+		t.Errorf("empty pools: got %v, want nil", got)
+	}
+}
+
 func TestEnumerateSkipsDownInterfaces(t *testing.T) {
 	src := fakeSource{ifs: []Interface{
 		{Name: "eth0", Index: 1, Flags: 0, Addrs: []net.IPNet{ipnet("192.168.1.10/24")}},

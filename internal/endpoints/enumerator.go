@@ -111,10 +111,13 @@ func isGlobalV6(ip net.IP) bool {
 }
 
 type EnumerateResult struct {
-	LAN            []net.IP
-	PublicV6       []net.IP // default-route iface only
-	DefaultIfIndex int
-	DefaultIfName  string
+	LAN      []net.IP
+	PublicV6 []net.IP // default-route iface only
+	// Subset of PublicV6 flagged IFA_F_PERMANENT (static / DHCPv6). Empty on
+	// platforms without netlink flag data, so callers fall back to PublicV6.
+	PublicV6Permanent []net.IP
+	DefaultIfIndex    int
+	DefaultIfName     string
 }
 
 // LAN order: default-route iface first, then others. v6 is only collected
@@ -171,12 +174,15 @@ func Enumerate(src InterfaceSource, defaultIfIndex int, defaultIfName string) (E
 			// Skip SLAAC privacy-extension temporaries and deprecated
 			// addresses — promising one that's about to disappear is
 			// worse than not advertising it.
-			if flags, ok := iface.V6Flags[ip.String()]; ok {
-				if flags&ifaFlagTemporary != 0 || flags&ifaFlagDeprecated != 0 {
-					continue
-				}
+			flags, hasFlags := iface.V6Flags[ip.String()]
+			if hasFlags && (flags&ifaFlagTemporary != 0 || flags&ifaFlagDeprecated != 0) {
+				continue
 			}
-			res.PublicV6 = append(res.PublicV6, append(net.IP(nil), ip.To16()...))
+			dup := append(net.IP(nil), ip.To16()...)
+			res.PublicV6 = append(res.PublicV6, dup)
+			if hasFlags && flags&ifaFlagPermanent != 0 {
+				res.PublicV6Permanent = append(res.PublicV6Permanent, dup)
+			}
 		}
 	}
 	res.LAN = append(lanOnDefault, lanOnOther...)
@@ -187,4 +193,5 @@ func Enumerate(src InterfaceSource, defaultIfIndex int, defaultIfName string) (E
 var (
 	ifaFlagTemporary  uint32
 	ifaFlagDeprecated uint32
+	ifaFlagPermanent  uint32
 )

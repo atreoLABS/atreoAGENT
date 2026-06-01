@@ -194,6 +194,44 @@ func PublicV6() ([]net.IP, error) {
 	return res.PublicV6, nil
 }
 
+// PreferredV6Source returns the global IPv6 address the agent should bind as the
+// source of its DDNS update to atreoLINK, so the AAAA record lands on a stable
+// address instead of an RFC 4941 privacy-extension temporary (which the kernel
+// would otherwise pick as the egress source). Prefers an IFA_F_PERMANENT address
+// (static / DHCPv6); falls back to a SLAAC stable address. Returns nil when none
+// exists, in which case the caller leaves source selection to the kernel.
+// Deterministic across calls so the record doesn't flap between equally-eligible
+// addresses.
+func PreferredV6Source() (net.IP, error) {
+	idx, name, _ := DefaultRoute()
+	res, err := Enumerate(NewRealSource(), idx, name)
+	if err != nil {
+		return nil, err
+	}
+	return pickPreferredV6(res.PublicV6Permanent, res.PublicV6), nil
+}
+
+// pickPreferredV6 chooses the permanent address when one exists, else the
+// lowest stable address — picking the smallest by byte order keeps the choice
+// deterministic across calls so the DDNS record doesn't flap between equally
+// eligible addresses. Returns nil when neither pool has an entry.
+func pickPreferredV6(permanent, stable []net.IP) net.IP {
+	pool := permanent
+	if len(pool) == 0 {
+		pool = stable
+	}
+	if len(pool) == 0 {
+		return nil
+	}
+	best := pool[0]
+	for _, ip := range pool[1:] {
+		if bytes.Compare(ip.To16(), best.To16()) < 0 {
+			best = ip
+		}
+	}
+	return best
+}
+
 // Final order: default-route LAN first, other LAN, public4, public6.
 func (s *Service) collectCandidates() ([]Candidate, error) {
 	defaultIfIdx, defaultIfName, _ := DefaultRoute()

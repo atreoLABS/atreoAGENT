@@ -39,6 +39,13 @@ type Client struct {
 	v4cleanup      func()              // tears down the active IPv4 mapping
 	lastExternalIP string              // last IPv4 external IP (feeds public4 candidate)
 	v6pinholes     map[string]*pinhole // keyed by IPv6 address string
+	statePath      string              // JSON file persisting PCP nonces ("" = no persistence)
+
+	// IPv4 mapping nonce, reused across renewals/restarts so each renewal
+	// refreshes the same mapping instead of colliding with the live one.
+	v4nonce    pcp.Nonce
+	v4nonceSet bool
+	v4localIP  string // internal IP the v4 nonce is keyed to
 }
 
 // pinhole holds the teardown for one IPv6 firewall pinhole plus, for the PCP
@@ -61,6 +68,14 @@ func NewClient(internalPort int) *Client {
 // SetPCPEnabled toggles PCP attempts (both families). Call once at
 // construction, before any mapping goroutine starts.
 func (c *Client) SetPCPEnabled(enabled bool) { c.pcpEnabled = enabled }
+
+// SetStatePath persists the PCP nonces (v4 mapping + v6 pinholes) to path and
+// loads any saved ones. Call once at construction. A renewal must reuse the
+// original nonce or the gateway rejects it NOT_AUTHORIZED (RFC 6887 anti-hijack).
+func (c *Client) SetStatePath(path string) {
+	c.statePath = path
+	c.loadNonces()
+}
 
 func (c *Client) TryMapping(ctx context.Context) (externalIP string, externalPort int, err error) {
 	ip, port, err := c.addMapping(ctx)
@@ -202,7 +217,11 @@ func (c *Client) tryPCPv4(ctx context.Context, localIP string) (string, int, err
 	server := netip.AddrPortFrom(gwAddr, pcp.ServerPort)
 	clientAddr := net.ParseIP(localIP)
 
-	nonce, err := pcp.NewNonce()
+	// Reuse the same nonce across renewals (and restarts) so the gateway
+	// refreshes the existing mapping instead of rejecting a fresh-nonce add for
+	// an internal IP+port that's still mapped. A changed internal IP starts a
+	// new mapping, so re-key the nonce when localIP moves.
+	nonce, err := c.v4MappingNonce(localIP)
 	if err != nil {
 		return "", 0, err
 	}
@@ -211,6 +230,7 @@ func (c *Client) tryPCPv4(ctx context.Context, localIP string) (string, int, err
 	if err != nil {
 		return "", 0, err
 	}
+	c.persistNonces()
 
 	extIP := m.ExternalIP.String()
 	mappedPort := int(m.ExternalPort)
@@ -230,6 +250,22 @@ func (c *Client) tryPCPv4(ctx context.Context, localIP string) (string, int, err
 	c.mu.Unlock()
 
 	return extIP, mappedPort, nil
+}
+
+// v4MappingNonce returns the persistent IPv4 PCP nonce, minting (and keying to
+// localIP) one on first use or whenever the internal IP changes.
+func (c *Client) v4MappingNonce(localIP string) (pcp.Nonce, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.v4nonceSet && c.v4localIP == localIP {
+		return c.v4nonce, nil
+	}
+	n, err := pcp.NewNonce()
+	if err != nil {
+		return pcp.Nonce{}, err
+	}
+	c.v4nonce, c.v4nonceSet, c.v4localIP = n, true, localIP
+	return n, nil
 }
 
 // /proc/net/route — x.x.x.1 is just a convention, not a rule.
@@ -562,13 +598,20 @@ func (c *Client) RefreshV6Pinholes(ctx context.Context, addrs []net.IP) error {
 	// Drop pinholes whose address is no longer advertised (e.g. SLAAC churn).
 	c.mu.Lock()
 	var stale []func()
+	deleted := false
 	for k, p := range c.v6pinholes {
 		if _, ok := desired[k]; !ok {
-			stale = append(stale, p.remove)
+			if p.remove != nil {
+				stale = append(stale, p.remove)
+			}
 			delete(c.v6pinholes, k)
+			deleted = true
 		}
 	}
 	c.mu.Unlock()
+	if deleted {
+		c.persistNonces()
+	}
 	for _, rm := range stale {
 		rm()
 	}
@@ -612,6 +655,12 @@ func (c *Client) ensureV6Pinhole(ctx context.Context, key string, ip net.IP, v6g
 
 		_, err := pcp.RequestMapping(ctx, v6gw, ip, ip, pcp.ProtoUDP,
 			uint16(c.internalPort), uint16(c.internalPort), pinholeLeaseSeconds, nonce)
+		if err != nil && existing != nil {
+			// Keep the pinhole we already hold rather than risk a delete-then-readd
+			// that breaks inbound for real if the re-add fails. Next tick retries.
+			logging.Debug("PCP: gateway rejected v6 pinhole refresh for %s; keeping existing mapping: %v", ip, err)
+			return nil
+		}
 		if err == nil {
 			server := v6gw
 			rm := func() {
@@ -633,10 +682,14 @@ func (c *Client) ensureV6Pinhole(ctx context.Context, key string, ip net.IP, v6g
 		pcpErr = err
 	}
 
-	// Both attempts failed — surface why each did so the operator can tell a
-	// gateway-discovery problem from a genuine no-support gateway.
+	// Both attempts failed — name the address and add/renew stage so a
+	// recurring failure is traceable to a specific candidate.
+	stage := "new"
+	if existing != nil {
+		stage = "renew"
+	}
 	if upErr := c.tryUPnPPinhole(ctx, key, ip); upErr != nil {
-		return fmt.Errorf("PCP: %v; UPnP: %w", pcpErr, upErr)
+		return fmt.Errorf("[%s] (%s) PCP: %v; UPnP: %w", ip, stage, pcpErr, upErr)
 	}
 	return nil
 }
@@ -681,6 +734,7 @@ func (c *Client) storePinhole(key string, p *pinhole) {
 	c.mu.Lock()
 	c.v6pinholes[key] = p
 	c.mu.Unlock()
+	c.persistNonces()
 }
 
 const allZeroV6Hex = "00000000000000000000000000000000"

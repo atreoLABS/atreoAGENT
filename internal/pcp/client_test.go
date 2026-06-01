@@ -6,9 +6,51 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestResultName(t *testing.T) {
+	cases := map[byte]string{
+		0:  "SUCCESS",
+		1:  "UNSUPP_VERSION",
+		2:  "NOT_AUTHORIZED",
+		3:  "MALFORMED_REQUEST",
+		4:  "UNSUPP_OPCODE",
+		5:  "UNSUPP_OPTION",
+		6:  "MALFORMED_OPTION",
+		7:  "NETWORK_FAILURE",
+		8:  "NO_RESOURCES",
+		9:  "UNSUPP_PROTOCOL",
+		10: "USER_EX_QUOTA",
+		11: "CANNOT_PROVIDE_EXTERNAL",
+		12: "ADDRESS_MISMATCH",
+		13: "EXCESSIVE_REMOTE_PEERS",
+		14: "UNKNOWN",
+		99: "UNKNOWN",
+	}
+	for code, want := range cases {
+		if got := resultName(code); got != want {
+			t.Errorf("resultName(%d) = %q, want %q", code, got, want)
+		}
+	}
+}
+
+// A rejected MAP must name the failure so operators can self-diagnose.
+func TestParseMapResponseNamesRejection(t *testing.T) {
+	pkt := make([]byte, headerLen)
+	pkt[0] = protocolVersion
+	pkt[1] = opcodeMap | responseBit
+	pkt[3] = 2 // NOT_AUTHORIZED
+	_, matched, err := parseMapResponse(pkt, Nonce{})
+	if !matched || err == nil {
+		t.Fatalf("expected matched error response, matched=%v err=%v", matched, err)
+	}
+	if !strings.Contains(err.Error(), "NOT_AUTHORIZED") {
+		t.Errorf("error %q should name NOT_AUTHORIZED", err)
+	}
+}
 
 // fakeServer answers one MAP request on a loopback socket using handle, which
 // receives the raw request and returns the raw reply (nil → stay silent).

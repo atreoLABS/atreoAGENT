@@ -134,6 +134,20 @@ func TestUPnPEnabled_YAMLFalseSurvivesAndEnvOverrides(t *testing.T) {
 	}
 }
 
+func TestDataDirPaths(t *testing.T) {
+	c := &Config{DataDir: "/data"}
+	cases := map[string]string{
+		c.PinholePath():          "/data/pcp_nonces.json",
+		c.CustomDomainPath():     "/data/custom_domain.json",
+		c.PortMappingAlertPath(): "/data/port_mapping_alert.cooldown",
+	}
+	for got, want := range cases {
+		if got != want {
+			t.Errorf("path = %q, want %q", got, want)
+		}
+	}
+}
+
 func TestApplyDefaults_PreservesExisting(t *testing.T) {
 	cfg := &Config{
 		AtreoLinkAPIURL: "https://custom",

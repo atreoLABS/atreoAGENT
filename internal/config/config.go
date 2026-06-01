@@ -395,3 +395,7 @@ func (c *Config) CustomDomainPath() string {
 func (c *Config) PortMappingAlertPath() string {
 	return filepath.Join(c.DataDir, "port_mapping_alert.cooldown")
 }
+
+func (c *Config) PinholePath() string {
+	return filepath.Join(c.DataDir, "pcp_nonces.json")
+}

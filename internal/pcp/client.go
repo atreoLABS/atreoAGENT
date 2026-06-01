@@ -42,6 +42,43 @@ const (
 	resultUnsuppVersion = 1
 )
 
+// resultName maps an RFC 6887 §7.4 result code to its mnemonic so logs name the
+// failure instead of an opaque integer (NOT_AUTHORIZED usually = wrong nonce).
+func resultName(code byte) string {
+	switch code {
+	case 0:
+		return "SUCCESS"
+	case 1:
+		return "UNSUPP_VERSION"
+	case 2:
+		return "NOT_AUTHORIZED"
+	case 3:
+		return "MALFORMED_REQUEST"
+	case 4:
+		return "UNSUPP_OPCODE"
+	case 5:
+		return "UNSUPP_OPTION"
+	case 6:
+		return "MALFORMED_OPTION"
+	case 7:
+		return "NETWORK_FAILURE"
+	case 8:
+		return "NO_RESOURCES"
+	case 9:
+		return "UNSUPP_PROTOCOL"
+	case 10:
+		return "USER_EX_QUOTA"
+	case 11:
+		return "CANNOT_PROVIDE_EXTERNAL"
+	case 12:
+		return "ADDRESS_MISMATCH"
+	case 13:
+		return "EXCESSIVE_REMOTE_PEERS"
+	default:
+		return "UNKNOWN"
+	}
+}
+
 // ErrUnsupportedVersion signals that the gateway answered the PCP (v2)
 // request with UNSUPP_VERSION — the cue to fall back to NAT-PMP, which shares
 // UDP port 5351.
@@ -176,7 +213,7 @@ func parseMapResponse(pkt []byte, nonce Nonce) (m Mapping, matched bool, err err
 		if result == resultUnsuppVersion {
 			return Mapping{}, true, ErrUnsupportedVersion
 		}
-		return Mapping{}, true, fmt.Errorf("pcp: MAP rejected (result code %d)", result)
+		return Mapping{}, true, fmt.Errorf("pcp: MAP rejected (%s, result code %d)", resultName(result), result)
 	}
 
 	if len(pkt) < msgLen {

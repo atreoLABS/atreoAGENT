@@ -8,13 +8,24 @@ on:
 
 permissions:
   contents: read
-  packages: write
-  id-token: write # cosign keyless (OIDC) signing
 
 jobs:
+  # Gate the publish on the full security pipeline (govulncheck, gosec,
+  # gitleaks, image scan). Reuses security.yml so there's a single scan
+  # definition; publish only runs if every scan passes.
+  security:
+    uses: ./.github/workflows/security.yml
+    permissions:
+      contents: read
+
   publish:
     name: Build and push to GHCR
+    needs: security
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # cosign keyless (OIDC) signing
     steps:
       - uses: actions/checkout@v6
 
@@ -52,40 +63,9 @@ jobs:
           echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
           echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
-      # Build a single-arch amd64 image into the local docker daemon so it can
-      # be vulnerability-scanned BEFORE anything is pushed. The gha cache makes
-      # this layer-identical to the multi-arch build below.
-      - id: scan_build
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          load: true
-          platforms: linux/amd64
-          tags: scan-target:latest
-          build-args: |
-            VERSION=${{ steps.build_meta.outputs.version }}
-            COMMIT=${{ steps.build_meta.outputs.commit }}
-            DATE=${{ steps.build_meta.outputs.date }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      # Blocking: fail the publish on fixable HIGH/CRITICAL CVEs in the image.
-      # --ignore-unfixed avoids blocking on base-image CVEs with no upstream fix.
-      - name: Trivy image scan
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: scan-target:latest
-          format: table
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: "1"
-        env:
-          TRIVY_DB_REPOSITORY: ghcr.io/aquasecurity/trivy-db
-
-      # (Dockerfile misconfig is scanned on PRs in security.yml — it needs no
-      # built image, so it doesn't belong in the publish flow.)
-
-      # Push the real multi-arch image only after the scan gate passed.
+      # Vulnerability scanning lives in the security workflow (which runs on
+      # PRs, main, tags, and weekly); this workflow only builds, pushes, and
+      # signs. Gating happens at PR-merge via branch protection.
       - id: build
         uses: docker/build-push-action@v7
         with:
@@ -101,11 +81,17 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # OCI references must be lowercase; github.repository can contain
+      # uppercase (atreoLABS/atreoAGENT-dev), which syft/cosign reject. The
+      # push itself is fine because docker/metadata-action lowercases its tags.
+      - id: imgref
+        run: echo "value=ghcr.io/${GITHUB_REPOSITORY,,}@${{ steps.build.outputs.digest }}" >> "$GITHUB_OUTPUT"
+
       # SBOM (SPDX) for supply-chain transparency; kept as a build artifact.
       - name: Generate SBOM
         uses: anchore/sbom-action@v0
         with:
-          image: ghcr.io/${{ github.repository }}@${{ steps.build.outputs.digest }}
+          image: ${{ steps.imgref.outputs.value }}
           format: spdx-json
           output-file: sbom.spdx.json
           artifact-name: sbom.spdx.json
@@ -115,4 +101,4 @@ jobs:
       - uses: sigstore/cosign-installer@v3
 
       - name: Sign image
-        run: cosign sign --yes "ghcr.io/${{ github.repository }}@${{ steps.build.outputs.digest }}"
+        run: cosign sign --yes "${{ steps.imgref.outputs.value }}"

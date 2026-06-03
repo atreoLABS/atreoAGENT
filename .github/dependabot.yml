@@ -7,8 +7,9 @@ updates:
       day: saturday
       time: "01:00"
     groups:
-      # All non-breaking Go module bumps land in one PR per week.
-      # Major bumps still get their own PR (default behavior).
+      # Non-breaking bumps land in one PR per week. Majors are intentionally
+      # left ungrouped so each gets its own PR (Dependabot's default), making a
+      # breaking upgrade easy to review, merge, or revert in isolation.
       go-minor-patch:
         update-types:
           - minor
@@ -27,8 +28,9 @@ updates:
         patterns:
           - "*"
 
-  # Base-image bumps (golang:1.25-alpine build stage, alpine runtime) so the
-  # published image picks up upstream CVE fixes without manual edits.
+  # Base-image bumps (golang build stage + alpine runtime, including the Go
+  # toolchain version in the build image) so the published image picks up new
+  # releases and CVE fixes. patterns:["*"] groups all bumps, majors included.
   - package-ecosystem: docker
     directory: "/"
     schedule:

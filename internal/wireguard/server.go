@@ -148,11 +148,15 @@ func (s *Server) Start(ctx context.Context) error {
 	logging.Info("WireGuard: starting interface %s on :%d (IP: %s)", s.iface, s.listenPort, s.serverIP)
 	logging.Info("WireGuard: public key: %s", s.PublicKey())
 
-	// `wg set private-key` requires a file path.
+	// `wg set private-key` requires a file path. Written 0600 and removed
+	// once the kernel has the key so it doesn't sit resident on disk for
+	// the process lifetime (the canonical copy already lives 0600 under
+	// keysDir; this raw base64 file is purely transient).
 	privKeyFile := filepath.Join(s.keysDir, "wg_private_raw.key")
 	if err := atomic.WriteFile(privKeyFile, []byte(base64.StdEncoding.EncodeToString(s.privateKey)+"\n"), 0600); err != nil {
 		return fmt.Errorf("write temp private key: %w", err)
 	}
+	defer func() { _ = os.Remove(privKeyFile) }()
 
 	_ = exec.CommandContext(ctx, "ip", "link", "del", s.iface).Run()
 

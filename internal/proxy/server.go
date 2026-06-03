@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/atreoLABS/atreoAGENT/internal/acl"
 	"github.com/atreoLABS/atreoAGENT/internal/atreolink"
@@ -20,6 +21,11 @@ import (
 // Per-app routing by Host header: <slug>.<suffix>. The reserved slug
 // "atreolink" short-circuits to 204 for the web UI's tunnel status probe.
 const atreolinkSlug = "atreolink"
+
+// TLS 1.3 floor: clients are modern browsers / first-party apps, so there
+// is no reason to negotiate the weaker 1.2 handshake. Lower here (and in the
+// SMTP STARTTLS path) only if a legacy client is ever shown to need it.
+const tlsMinVersion = tls.VersionTLS13
 
 type Server struct {
 	aclStore        *acl.Store
@@ -52,9 +58,14 @@ func NewServer(aclStore *acl.Store, httpsListen, httpListen string, registry *ce
 	}
 
 	s.httpServer = &http.Server{
-		Addr:     httpsListen,
-		Handler:  s,
-		ErrorLog: logging.StdLoggerAt(slog.LevelDebug),
+		Addr:    httpsListen,
+		Handler: s,
+		// Slowloris defence; the proxy binds 0.0.0.0 so LAN/tunnel clients
+		// reach it. Bodies can be large app uploads, so only the header
+		// read is bounded here, not the whole request.
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		ErrorLog:          logging.StdLoggerAt(slog.LevelDebug),
 	}
 	return s
 }
@@ -68,7 +79,7 @@ func (s *Server) Start(ctx context.Context) error {
 	if s.registry != nil && s.registry.HasAny() {
 		s.httpServer.TLSConfig = &tls.Config{
 			GetCertificate: s.registry.GetCertificate,
-			MinVersion:     tls.VersionTLS12,
+			MinVersion:     tlsMinVersion,
 		}
 		logging.Info("Proxy server starting on %s (HTTPS, %d cert(s))", s.listen, len(s.registry.Suffixes()))
 		// Empty paths → ListenAndServeTLS uses TLSConfig.

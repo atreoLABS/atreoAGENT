@@ -329,7 +329,7 @@ func (h *Handlers) HandleChallenge(msg atreolink.TunnelMessage) (*atreolink.Tunn
 // HandleProvision returns a signed WireGuard config to the client. The
 // envelope signature over the canonical payload binds WG pubkey + nonce
 // + memberId. The (memberId → identityPublic) mapping comes from the
-// ACL, never from the request — zero-knowledge invariant.
+// ACL, never from the request — identity-pinning invariant.
 func (h *Handlers) HandleProvision(msg atreolink.TunnelMessage) (*atreolink.TunnelMessage, error) {
 	// Fail before any side effect so a broken deploy doesn't leave
 	// half-applied peer state.

@@ -218,7 +218,10 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 
 	// Without the firewall, anything bound to 0.0.0.0 is reachable to
-	// every paired peer, bypassing the proxy ACL. Failure is non-fatal.
+	// every paired peer, bypassing the proxy ACL. Fail closed: abort
+	// startup (WireGuard is already up but no peers are configured yet)
+	// rather than admit peers unconfined. Operators who genuinely can't
+	// run iptables must opt out via wireguard.firewall_enabled=false.
 	if a.cfg.WireGuard.FirewallEnabled != nil && *a.cfg.WireGuard.FirewallEnabled {
 		allowed := []int{a.cfg.Proxy.HTTPSPort, a.cfg.Proxy.HTTPPort}
 		a.firewall = firewall.NewManager(firewall.Config{
@@ -226,7 +229,8 @@ func (a *Agent) Run(ctx context.Context) error {
 			AllowedTCPPorts: allowed,
 		})
 		if err := a.firewall.Apply(ctx); err != nil {
-			logging.Warn("WARNING: tunnel firewall not installed (%v) — peers can reach every host port. Fix iptables and restart.", err)
+			_ = a.wgServer.Stop()
+			return fmt.Errorf("tunnel firewall not installed (%w) — refusing to admit peers unconfined; install iptables or set wireguard.firewall_enabled=false to override", err)
 		}
 		a.firewall.StartWatchdog(ctx)
 	} else {
@@ -395,6 +399,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			RatePerMinute:   a.cfg.SMTP.RatePerMinute,
 			TLSEnabled:      a.cfg.SMTP.TLSEnabled,
 			DataDir:         a.cfg.DataDir,
+			TrustedNetworks: a.cfg.SMTP.TrustedNetworks,
 		}, a.aclStore, a.notifyServer)
 		if err != nil {
 			logging.Warn("Warning: SMTP gateway failed to start: %v", err)

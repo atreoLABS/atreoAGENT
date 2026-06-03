@@ -7,16 +7,13 @@ import (
 )
 
 func TestApply_NoIptables(t *testing.T) {
-	// On any test host without iptables on PATH, Apply must degrade
-	// gracefully — log a warning and return nil. We can't simulate the
-	// missing-binary case portably, so just exercise the early-return
-	// branch when iptables isn't available.
-	if _, err := exec.LookPath("iptables"); err == nil {
-		t.Skip("iptables present; this test only meaningful when missing")
-	}
+	// Fail closed: without iptables on PATH, Apply must return an error so
+	// the agent refuses to admit peers unconfined. Simulate a missing binary
+	// by pointing PATH at an empty dir (portable regardless of host setup).
+	t.Setenv("PATH", t.TempDir())
 	m := NewManager(Config{Iface: "wg-atreo", AllowedTCPPorts: []int{443}})
-	if err := m.Apply(context.Background()); err != nil {
-		t.Errorf("Apply with no iptables returned error: %v", err)
+	if err := m.Apply(context.Background()); err == nil {
+		t.Error("Apply with no iptables on PATH should return an error (fail closed)")
 	}
 	// Stop on a non-applied manager is a no-op.
 	m.Stop(context.Background())

@@ -9,6 +9,7 @@ on:
 permissions:
   contents: read
   packages: write
+  id-token: write # cosign keyless (OIDC) signing
 
 jobs:
   publish:
@@ -51,7 +52,42 @@ jobs:
           echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
           echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/build-push-action@v7
+      # Build a single-arch amd64 image into the local docker daemon so it can
+      # be vulnerability-scanned BEFORE anything is pushed. The gha cache makes
+      # this layer-identical to the multi-arch build below.
+      - id: scan_build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          platforms: linux/amd64
+          tags: scan-target:latest
+          build-args: |
+            VERSION=${{ steps.build_meta.outputs.version }}
+            COMMIT=${{ steps.build_meta.outputs.commit }}
+            DATE=${{ steps.build_meta.outputs.date }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Blocking: fail the publish on fixable HIGH/CRITICAL CVEs in the image.
+      # --ignore-unfixed avoids blocking on base-image CVEs with no upstream fix.
+      - name: Trivy image scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: scan-target:latest
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+        env:
+          TRIVY_DB_REPOSITORY: ghcr.io/aquasecurity/trivy-db
+
+      # (Dockerfile misconfig is scanned on PRs in security.yml — it needs no
+      # built image, so it doesn't belong in the publish flow.)
+
+      # Push the real multi-arch image only after the scan gate passed.
+      - id: build
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -64,3 +100,19 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # SBOM (SPDX) for supply-chain transparency; kept as a build artifact.
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ghcr.io/${{ github.repository }}@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+          artifact-name: sbom.spdx.json
+
+      # Keyless (OIDC) signature over the pushed digest, so consumers can verify
+      # provenance with `cosign verify`.
+      - uses: sigstore/cosign-installer@v3
+
+      - name: Sign image
+        run: cosign sign --yes "ghcr.io/${{ github.repository }}@${{ steps.build.outputs.digest }}"

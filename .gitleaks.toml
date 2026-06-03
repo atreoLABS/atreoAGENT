@@ -1,0 +1,10 @@
+# gitleaks config. Extends the upstream default ruleset and adds narrow
+# allowlists for known false positives. Keep allowlists as specific as
+# possible — a blanket path/rule exclusion can hide a real leak.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "lego ACME elliptic-curve KeyType constant, not a credential"
+regexTarget = "line"
+regexes = ['''config\.Certificate\.KeyType''']

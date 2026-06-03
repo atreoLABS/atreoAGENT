@@ -1,9 +1,22 @@
 # golangci-lint v2 config. The CI action pins a matching version so a new
 # upstream release can't change which linters run out from under a green
 # build. Omitting `linters.default` keeps the standard set (errcheck, govet,
-# ineffassign, staticcheck, unused); misspell is added on top.
+# ineffassign, staticcheck, unused); the linters below are added on top.
+#
+# Security/quality additions:
+#   bodyclose   — unclosed HTTP response bodies (resource leaks)
+#   nilerr      — returning nil after a non-nil error check
+#   asasalint   — passing []any to a ...any variadic by mistake
+#   unconvert   — redundant type conversions
+#   copyloopvar — leftover pre-Go-1.22 loop-variable copies
+#   misspell    — typos
 version: "2"
 
 linters:
   enable:
     - misspell
+    - bodyclose
+    - nilerr
+    - asasalint
+    - unconvert
+    - copyloopvar

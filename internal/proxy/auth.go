@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/atreoLABS/atreoAGENT/internal/acl"
 	"github.com/atreoLABS/atreoAGENT/internal/certs"
@@ -35,9 +36,15 @@ func NewAuthServer(aclStore *acl.Store, listen string, registry *certs.Registry,
 		trustedProxies:  ParseTrustedNetworks(trustedProxyCIDRs),
 	}
 	s.httpServer = &http.Server{
-		Addr:     listen,
-		Handler:  s,
-		ErrorLog: logging.StdLoggerAt(slog.LevelDebug),
+		Addr:    listen,
+		Handler: s,
+		// Slowloris defence; forward-auth subrequests are tiny, so bound the
+		// whole request, not just the header read.
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       30 * time.Second,
+		ErrorLog:          logging.StdLoggerAt(slog.LevelDebug),
 	}
 	return s
 }

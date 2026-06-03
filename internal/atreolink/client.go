@@ -349,7 +349,6 @@ func (c *Client) UpdateEndpoint(ctx context.Context, ipOverride string, v6Source
 
 	var wg sync.WaitGroup
 	for i, a := range attempts {
-		i, a := i, a
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

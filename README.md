@@ -17,7 +17,7 @@ atreoAGENT runs on your home server and pairs it with [atreoLINK](https://atreol
 - **SMTP gateway** *(optional)*. Self-hosted apps that send email alerts can route them through the agent as encrypted push notifications, with no external mail server needed.
 - **Family invites with cryptographic identity pinning.** Once a family member accepts an invite, the agent verifies every later message they send against the identity key they pinned at pair time.
 
-atreoLINK never sees your traffic. It coordinates pairing, relays signed control messages, and stores opaque encrypted notification ciphertexts. The agent and clients (mobile, TV, browser) pin each other's identity keys at pair time and verify everything against them.
+Your app traffic is end-to-end encrypted over WireGuard; atreoLINK cannot read its contents. It coordinates pairing, relays signed control messages, holds minimal coordination metadata (which apps each member may reach), not traffic contents, and stores opaque encrypted notification ciphertexts. The agent and clients (mobile, TV, browser) pin each other's identity keys at pair time and verify everything against them.
 
 ## Quick start
 

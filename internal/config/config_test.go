@@ -33,6 +33,35 @@ func TestDefaultConfig(t *testing.T) {
 	}
 }
 
+// applyDefaults must seed the SMTP allowlist with the LAN/WG default when
+// the operator leaves trusted_networks unset — the broad 0.0.0.0 bind relies
+// on this allowlist to stay LAN-only.
+func TestApplyDefaults_SMTPTrustedNetworks(t *testing.T) {
+	cfg := &Config{}
+	applyDefaults(cfg)
+	if len(cfg.SMTP.TrustedNetworks) == 0 {
+		t.Fatal("SMTP.TrustedNetworks should default to a LAN allowlist, got empty")
+	}
+	wantContains := map[string]bool{"10.0.0.0/8": false, "192.168.0.0/16": false, "100.64.0.0/24": false}
+	for _, c := range cfg.SMTP.TrustedNetworks {
+		if _, ok := wantContains[c]; ok {
+			wantContains[c] = true
+		}
+	}
+	for cidr, found := range wantContains {
+		if !found {
+			t.Errorf("default SMTP allowlist missing %s", cidr)
+		}
+	}
+
+	// An operator-provided list must survive untouched.
+	custom := &Config{SMTP: SMTPConfig{TrustedNetworks: []string{"172.20.0.0/16"}}}
+	applyDefaults(custom)
+	if len(custom.SMTP.TrustedNetworks) != 1 || custom.SMTP.TrustedNetworks[0] != "172.20.0.0/16" {
+		t.Errorf("operator allowlist overwritten: %v", custom.SMTP.TrustedNetworks)
+	}
+}
+
 // SavePairing persists only the three identity fields to pairing.json,
 // never touches config.yaml, and Load repopulates them while leaving
 // runtime-derived values (endpoint_ip) at their non-frozen defaults.

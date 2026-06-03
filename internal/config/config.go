@@ -36,12 +36,19 @@ type Config struct {
 
 // LAN-only SMTP-to-push gateway. AUTH (PLAIN/LOGIN, password = notify
 // API key) is always required; STARTTLS is opt-in.
+//
+// The listener binds 0.0.0.0 by design (host-networked containers can't
+// rely on reaching the host's loopback), so a source-IP allowlist —
+// not the bind address — is what keeps the gateway LAN-only. TrustedNetworks
+// defaults to loopback + RFC1918 + the WireGuard subnet; connections from
+// outside it are dropped before the base64 AUTH password is ever read.
 type SMTPConfig struct {
-	Enabled         bool   `yaml:"enabled"`
-	Listen          string `yaml:"listen"`            // default: "0.0.0.0:2525"
-	MaxMessageBytes int64  `yaml:"max_message_bytes"` // default: 1 MiB
-	RatePerMinute   int    `yaml:"rate_per_minute"`   // default: 5 per source IP
-	TLSEnabled      bool   `yaml:"tls_enabled"`       // self-signed; clients must skip cert verification
+	Enabled         bool     `yaml:"enabled"`
+	Listen          string   `yaml:"listen"`            // default: "0.0.0.0:2525"
+	MaxMessageBytes int64    `yaml:"max_message_bytes"` // default: 1 MiB
+	RatePerMinute   int      `yaml:"rate_per_minute"`   // default: 50 per source IP
+	TLSEnabled      bool     `yaml:"tls_enabled"`       // self-signed; clients must skip cert verification
+	TrustedNetworks []string `yaml:"trusted_networks"`  // default: loopback + RFC1918 + WG subnet
 }
 
 type NotifyConfig struct {
@@ -189,7 +196,18 @@ func applyDefaults(cfg *Config) {
 		cfg.SMTP.MaxMessageBytes = 1 << 20 // 1 MiB
 	}
 	if cfg.SMTP.RatePerMinute == 0 {
-		cfg.SMTP.RatePerMinute = 5
+		cfg.SMTP.RatePerMinute = 50
+	}
+	// Empty allowlist → safe LAN default. Widening to public space is an
+	// explicit opt-in (set trusted_networks, e.g. 0.0.0.0/0). The WireGuard
+	// subnet is included so notifications can be triggered from the tunnel.
+	if len(cfg.SMTP.TrustedNetworks) == 0 {
+		cfg.SMTP.TrustedNetworks = []string{
+			"127.0.0.0/8", "::1/128",
+			"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+			"169.254.0.0/16", "fe80::/10", "fc00::/7",
+			cfg.WireGuard.TunnelSubnet,
+		}
 	}
 	if cfg.Proxy.Enabled == nil {
 		t := true
@@ -305,6 +323,15 @@ func applyEnvOverrides(cfg *Config) {
 		cfg.SMTP.TLSEnabled = true
 	} else if v == "false" || v == "0" {
 		cfg.SMTP.TLSEnabled = false
+	}
+	if v := os.Getenv("SMTP_TRUSTED_NETWORKS"); v != "" {
+		var cidrs []string
+		for _, c := range strings.Split(v, ",") {
+			if c = strings.TrimSpace(c); c != "" {
+				cidrs = append(cidrs, c)
+			}
+		}
+		cfg.SMTP.TrustedNetworks = cidrs
 	}
 }
 

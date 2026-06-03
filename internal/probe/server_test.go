@@ -242,7 +242,10 @@ func TestRateLimitRefillsOverTime(t *testing.T) {
 	nonce := nonceB64(t, 32)
 	// Burn the whole bucket.
 	for i := 0; i < 10; i++ {
-		_, _ = http.Get(ts.URL + "/atreo/ping?nonce=" + nonce + "&deviceId=" + deviceID)
+		resp, err := http.Get(ts.URL + "/atreo/ping?nonce=" + nonce + "&deviceId=" + deviceID)
+		if err == nil {
+			_ = resp.Body.Close()
+		}
 	}
 	// Advance 20 s → 20 tokens leaked → bucket well under cap again.
 	clock = clock.Add(20 * time.Second)

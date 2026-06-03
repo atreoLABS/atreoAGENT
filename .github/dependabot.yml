@@ -4,6 +4,8 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
+      day: saturday
+      time: "01:00"
     groups:
       # All non-breaking Go module bumps land in one PR per week.
       # Major bumps still get their own PR (default behavior).
@@ -16,9 +18,24 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
+      day: saturday
+      time: "01:00"
     groups:
       # Action version bumps are almost always safe; group everything,
       # including majors, since CI itself catches breakage.
       actions:
+        patterns:
+          - "*"
+
+  # Base-image bumps (golang:1.25-alpine build stage, alpine runtime) so the
+  # published image picks up upstream CVE fixes without manual edits.
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: saturday
+      time: "01:00"
+    groups:
+      docker:
         patterns:
           - "*"

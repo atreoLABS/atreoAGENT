@@ -1,0 +1,115 @@
+name: Security
+
+# Vulnerability + SAST + secret scanning. Runs on every push/PR and weekly so
+# newly-disclosed CVEs in unchanged code still surface. All scanners are
+# blocking (fail the build on findings).
+#
+# Actions are referenced by major-version tag to match the rest of this repo;
+# Dependabot's github-actions ecosystem keeps them current.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 1 * * 6" # Saturdays 01:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    name: govulncheck (Go vuln DB)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          cache: false
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - name: Run govulncheck
+        run: govulncheck ./...
+
+  gosec:
+    name: gosec (SAST)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          cache: false
+      - name: Install gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+      # Excluded rules are accepted-by-design for this systems daemon:
+      #   G115 int->uint16/int32 conversions (bounded ports/sizes)
+      #   G103 unsafe.Pointer (raw netlink parsing in endpoints/)
+      #   G104 unhandled errors (already covered by errcheck in golangci-lint)
+      #   G204 subprocess exec (only wg/ip/iptables; args validated — see
+      #        wireguard.validateWGPublicKey / validateTunnelIPv4)
+      #   G301/G306 state-file perms (acl.json/ip_alloc.json are non-secret;
+      #        keys + pins use 0600/0700 separately)
+      #   G304 file inclusion by variable (paths derive from the agent's own
+      #        data dir, never request input)
+      #   G404 weak RNG (reconnect jitter only; documented non-crypto)
+      #   G118 context.Background in graceful-shutdown goroutine (required)
+      - name: Run gosec
+        run: gosec -exclude=G115,G103,G104,G204,G301,G306,G304,G404,G118 ./...
+
+  gitleaks:
+    name: gitleaks (secrets)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          cache: false
+      - name: Install gitleaks
+        run: go install github.com/zricethezav/gitleaks/v8@latest
+      # Scans the working tree against .gitleaks.toml (default rules + a narrow
+      # allowlist for the lego KeyType false positive).
+      - name: Run gitleaks
+        run: gitleaks dir --no-banner --redact -c .gitleaks.toml --exit-code 1 .
+
+  dockerfile-config:
+    name: Trivy Dockerfile config (informational)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      # Static misconfig scan of the Dockerfile — no built image needed, so it
+      # runs here on every PR (catch regressions before merge) rather than in
+      # the publish flow. Informational only: the runtime image runs as root by
+      # design (the daemon needs NET_ADMIN for wg/ip/iptables), so this never
+      # fails the build.
+      - name: Scan Dockerfile
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: config
+          scan-ref: Dockerfile
+          format: table
+          output: trivy-config.txt
+          exit-code: "0"
+      # Render the result to the run's Step Summary so it's visible on the run
+      # page without digging through step logs.
+      - name: Publish to step summary
+        if: always()
+        run: |
+          {
+            echo "## Trivy Dockerfile config scan (informational)"
+            echo
+            echo "Misconfiguration findings for the runtime image's Dockerfile."
+            echo "These do **not** block the build — the image runs as root by"
+            echo "design (the daemon needs NET_ADMIN for wg/ip/iptables)."
+            echo
+            if [ -s trivy-config.txt ]; then
+              echo '```'
+              cat trivy-config.txt
+              echo '```'
+            else
+              echo "_No misconfigurations reported._"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

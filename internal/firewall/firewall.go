@@ -36,15 +36,14 @@ func NewManager(c Config) *Manager {
 }
 
 // Stale state from a previous crash is cleaned up first.
-// If iptables isn't on PATH, logs a warning and returns nil — tunnel
-// peers will then have unrestricted host access.
+// Fails closed: a missing iptables binary is an error so the caller can
+// refuse to bring up the tunnel rather than admit peers unconfined.
 func (m *Manager) Apply(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if _, err := exec.LookPath("iptables"); err != nil {
-		logging.Warn("firewall: iptables not on PATH — tunnel peers can reach EVERY host port. Install iptables and restart to enforce restrictions.")
-		return nil
+		return fmt.Errorf("firewall: iptables not on PATH: %w", err)
 	}
 	if m.cfg.Iface == "" {
 		return fmt.Errorf("firewall: empty iface")

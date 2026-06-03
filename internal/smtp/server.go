@@ -28,9 +28,57 @@ type Server struct {
 	notify    notifySender
 	gosmtp    *gosmtp.Server
 	limiter   *ipLimiter
+	trusted   []*net.IPNet
 	tlsOn     bool
 	mu        sync.Mutex
 	startedAt time.Time
+}
+
+// parseCIDRs is self-contained so the gateway doesn't depend on the proxy
+// package just for a handful of LAN ranges.
+func parseCIDRs(cidrs []string) []*net.IPNet {
+	var nets []*net.IPNet
+	for _, c := range cidrs {
+		if _, n, err := net.ParseCIDR(c); err == nil {
+			nets = append(nets, n)
+		} else {
+			logging.Warn("smtp: ignoring invalid trusted_networks CIDR %q: %v", c, err)
+		}
+	}
+	return nets
+}
+
+// allowlistIncludesPublic flags an over-broad allowlist by probing whether it
+// would admit well-known public addresses — a cheap startup sanity check.
+func (s *Server) allowlistIncludesPublic() bool {
+	for _, probe := range []string{"8.8.8.8", "2001:4860:4860::8888"} {
+		ip := net.ParseIP(probe)
+		for _, n := range s.trusted {
+			if n.Contains(ip) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// ipTrusted reports whether host is within the allowlist. An empty allowlist
+// trusts any source (the agent always supplies a LAN default, so a truly empty
+// list only happens if an operator clears it on purpose).
+func (s *Server) ipTrusted(host string) bool {
+	if len(s.trusted) == 0 {
+		return true
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	for _, n := range s.trusted {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // Read on every AUTH attempt so rotations propagate.
@@ -44,6 +92,7 @@ type Config struct {
 	RatePerMinute   int
 	TLSEnabled      bool // self-signed STARTTLS cert under DataDir
 	DataDir         string
+	TrustedNetworks []string // source-IP allowlist; empty = allow any (caller supplies the LAN default)
 }
 
 // notifySender — interface so tests can stub.
@@ -67,6 +116,7 @@ func NewServer(cfg Config, store *acl.Store, ns notifySender) (*Server, error) {
 		acl:     store,
 		notify:  ns,
 		limiter: newIPLimiter(cfg.RatePerMinute),
+		trusted: parseCIDRs(cfg.TrustedNetworks),
 	}
 	be := &backend{server: s}
 	gs := gosmtp.NewServer(be)
@@ -88,7 +138,9 @@ func NewServer(cfg Config, store *acl.Store, ns notifySender) (*Server, error) {
 		if err != nil {
 			return nil, err
 		}
-		gs.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
+		// TLS 1.3 floor — STARTTLS here is opportunistic LAN encryption for
+		// modern clients (Grafana etc.), so the weaker 1.2 handshake buys nothing.
+		gs.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13}
 		s.tlsOn = true
 	}
 
@@ -105,6 +157,9 @@ func (s *Server) Start(ctx context.Context) error {
 		tlsNote = "STARTTLS available (self-signed cert; clients must skip cert verification)"
 	}
 	logging.Info("smtp: listening on %s (full-email routing, AUTH PLAIN/LOGIN required, password = notify API key, %s)", s.cfg.Listen, tlsNote)
+	if s.allowlistIncludesPublic() {
+		logging.Warn("smtp: trusted_networks admits public IP space — the gateway is reachable from the internet; ensure this is intentional")
+	}
 
 	// Reap idle per-IP buckets so changing source IPs can't grow the map.
 	go func() {
@@ -147,6 +202,17 @@ func (b *backend) NewSession(c *gosmtp.Conn) (gosmtp.Session, error) {
 	host, _, err := net.SplitHostPort(c.Conn().RemoteAddr().String())
 	if err != nil {
 		host = c.Conn().RemoteAddr().String()
+	}
+	// Drop off-LAN sources before AUTH so the base64 password never reaches
+	// an untrusted peer. The socket binds broadly for host-networked Docker;
+	// this allowlist is what enforces the LAN-only contract.
+	if !b.server.ipTrusted(host) {
+		logging.Warn("smtp: rejected connection from %s (not in trusted_networks)", host)
+		return nil, &gosmtp.SMTPError{
+			Code:         554,
+			EnhancedCode: gosmtp.EnhancedCode{5, 7, 1},
+			Message:      "connection not permitted",
+		}
 	}
 	if !b.server.limiter.Allow(host) {
 		// 421 so the client retries instead of bouncing permanently.

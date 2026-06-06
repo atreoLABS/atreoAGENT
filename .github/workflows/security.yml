@@ -10,7 +10,7 @@ name: Security
 on:
   pull_request:
   schedule:
-    - cron: "0 1 * * 6" # Saturdays 01:00 UTC
+    - cron: "0 1 * * 0" # Sundays 01:00 UTC
   workflow_dispatch:
   # Called by publish-image.yml so the publish is gated on these scans; main
   # and tag pushes run the suite through that call rather than a second time

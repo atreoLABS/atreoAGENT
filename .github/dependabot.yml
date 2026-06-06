@@ -4,8 +4,8 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
-      day: saturday
-      time: "01:00"
+      day: friday
+      time: "20:00"
     groups:
       # Non-breaking bumps land in one PR per week. Majors are intentionally
       # left ungrouped so each gets its own PR (Dependabot's default), making a
@@ -19,8 +19,8 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
-      day: saturday
-      time: "01:00"
+      day: friday
+      time: "20:00"
     groups:
       # Action version bumps are almost always safe; group everything,
       # including majors, since CI itself catches breakage.
@@ -35,8 +35,8 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
-      day: saturday
-      time: "01:00"
+      day: friday
+      time: "20:00"
     groups:
       docker:
         patterns:

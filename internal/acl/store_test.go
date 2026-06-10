@@ -113,6 +113,124 @@ func TestIsAppAllowed_UnknownSlug(t *testing.T) {
 	}
 }
 
+func portTestMembers() []atreolink.MemberACLEntry {
+	return []atreolink.MemberACLEntry{
+		{
+			MemberID: "m1",
+			Role:     "admin",
+			Status:   "active",
+			Clients:  []atreolink.ClientRecord{{WGPublicKey: "key-a", TunnelIP: "100.64.0.2"}},
+			AllowedApps: []atreolink.App{
+				{ID: "a1", Name: "Nextcloud", Slug: "nextcloud", InternalURL: "http://localhost:8080"},
+				{ID: "a2", Name: "SSH", Slug: "ssh", Type: "port", Port: 22, Protocol: "tcp"},
+				{ID: "a3", Name: "Minecraft", Slug: "minecraft", Type: "port", Port: 25565, Protocol: "tcp"},
+				{ID: "a4", Name: "DNS", Slug: "dns", Type: "port", Port: 53, Protocol: "udp"},
+				{ID: "a5", Name: "Jellyfin", Slug: "jellyfin", Type: "port", Port: 8096, Protocol: "http"},
+			},
+		},
+		{
+			MemberID: "m2",
+			Role:     "member",
+			Status:   "active",
+			Clients:  []atreolink.ClientRecord{{WGPublicKey: "key-b", TunnelIP: "100.64.0.3"}},
+			AllowedApps: []atreolink.App{
+				{ID: "a3", Name: "Minecraft", Slug: "minecraft", Type: "port", Port: 25565, Protocol: "tcp"},
+			},
+		},
+		{
+			MemberID: "m3",
+			Role:     "member",
+			Status:   "suspended",
+			Clients:  []atreolink.ClientRecord{{WGPublicKey: "key-c", TunnelIP: "100.64.0.4"}},
+			AllowedApps: []atreolink.App{
+				{ID: "a3", Name: "Minecraft", Slug: "minecraft", Type: "port", Port: 25565, Protocol: "tcp"},
+			},
+		},
+		{
+			MemberID: "m4",
+			Role:     "member",
+			Status:   "active",
+			Clients:  []atreolink.ClientRecord{{WGPublicKey: "key-d", TunnelIP: "100.64.0.5"}},
+			AllowedApps: []atreolink.App{
+				{ID: "a1", Name: "Nextcloud", Slug: "nextcloud", InternalURL: "http://localhost:8080"},
+			},
+		},
+	}
+}
+
+func TestPortGrants(t *testing.T) {
+	store := NewStore("")
+	mustReplace(t, store, portTestMembers())
+
+	grants := store.PortGrants()
+	byIP := map[string]PortGrant{}
+	for _, g := range grants {
+		byIP[g.TunnelIP] = g
+	}
+
+	// Admin: all port apps split by protocol; proxy app ignored.
+	g1, ok := byIP["100.64.0.2"]
+	if !ok {
+		t.Fatal("expected grant for admin tunnel IP")
+	}
+	if !intsSetEqual(g1.TCP, []int{22, 25565, 8096}) || !intsSetEqual(g1.UDP, []int{53}) {
+		t.Errorf("admin grant = tcp:%v udp:%v, want tcp:[22 25565 8096] udp:[53]", g1.TCP, g1.UDP)
+	}
+
+	// Member with a single port grant.
+	g2, ok := byIP["100.64.0.3"]
+	if !ok || !intsSetEqual(g2.TCP, []int{25565}) || len(g2.UDP) != 0 {
+		t.Errorf("member grant = %+v, want tcp:[25565]", g2)
+	}
+
+	// Suspended member: no grant.
+	if _, ok := byIP["100.64.0.4"]; ok {
+		t.Error("suspended member must not receive a port grant")
+	}
+
+	// Proxy-only member: no grant.
+	if _, ok := byIP["100.64.0.5"]; ok {
+		t.Error("proxy-only member must not receive a port grant")
+	}
+}
+
+func TestPortAppNotReachableOverProxy(t *testing.T) {
+	store := NewStore("")
+	mustReplace(t, store, portTestMembers())
+
+	// Admin bypass must NOT resolve a port app by slug.
+	if allowed, _ := store.IsAppAllowed("100.64.0.2", "minecraft"); allowed {
+		t.Error("admin must not reach a port app over the proxy")
+	}
+	// Member granted the port app must not reach it over the proxy either.
+	if allowed, _ := store.IsAppAllowed("100.64.0.3", "minecraft"); allowed {
+		t.Error("member must not reach a port app over the proxy")
+	}
+	// FindAppBySlug never returns a port app.
+	if app := store.FindAppBySlug("minecraft"); app != nil {
+		t.Error("FindAppBySlug must skip port apps")
+	}
+}
+
+func intsSetEqual(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := map[int]int{}
+	for _, v := range a {
+		seen[v]++
+	}
+	for _, v := range b {
+		seen[v]--
+	}
+	for _, c := range seen {
+		if c != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 func TestPersistenceRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "acl.json")

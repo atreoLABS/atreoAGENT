@@ -194,7 +194,7 @@ func (h *Handlers) HandleDeviceState(msg atreolink.TunnelMessage) (*atreolink.Tu
 		if err := h.verifyAuthorization(da.Envelope.AsMessage("app:upserted"), AttestedAuth(ownerPub), ap.CommandEnvelopeFields, expectedIntent); err != nil {
 			return nil, fmt.Errorf("device:state rejected: app %s: %w", ap.App.ID, err)
 		}
-		if err := validateInternalURL(ap.App.InternalURL); err != nil {
+		if err := validateApp(ap.App); err != nil {
 			return nil, fmt.Errorf("device:state rejected: app %s: %w", ap.App.ID, err)
 		}
 		vApps = append(vApps, ap.App)
@@ -405,6 +405,11 @@ func (h *Handlers) HandleDeviceState(msg atreolink.TunnelMessage) (*atreolink.Tu
 				logging.Error("device:state: add peer %s: %v", c.WGPublicKey, err)
 			}
 		}
+	}
+
+	// Reconcile firewall grants after peers so their tunnel IPs are present.
+	if h.firewallReconcile != nil {
+		h.firewallReconcile(context.Background())
 	}
 
 	h.reconcileCustomDomain(st.CustomDomain, ownerPub)

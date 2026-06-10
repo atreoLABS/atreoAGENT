@@ -679,6 +679,9 @@ func (s *Store) IsAppAllowed(sourceIP, appSlug string) (bool, *atreolink.App) {
 	}
 
 	for i, app := range member.AllowedApps {
+		if app.IsPort() {
+			continue // firewall-reached, never the proxy
+		}
 		if app.EffectiveSlug() == appSlug {
 			return true, &member.AllowedApps[i]
 		}
@@ -695,6 +698,9 @@ func (s *Store) FindAppBySlug(slug string) *atreolink.App {
 
 func (s *Store) findAppBySlug(slug string) *atreolink.App {
 	for i, app := range s.apps {
+		if app.IsPort() {
+			continue // firewall-reached, never the proxy
+		}
 		if app.EffectiveSlug() == slug {
 			return &s.apps[i]
 		}
@@ -702,12 +708,59 @@ func (s *Store) findAppBySlug(slug string) *atreolink.App {
 	// Fallback for member-permissioned apps that pre-date the catalogue.
 	for _, m := range s.members {
 		for i, app := range m.AllowedApps {
+			if app.IsPort() {
+				continue
+			}
 			if app.EffectiveSlug() == slug {
 				return &m.AllowedApps[i]
 			}
 		}
 	}
 	return nil
+}
+
+// PortGrant authorises a peer (by tunnel source IP) to reach raw host ports.
+type PortGrant struct {
+	TunnelIP string
+	TCP      []int
+	UDP      []int
+}
+
+// PortGrants derives the per-peer raw-port grants: one per active member's
+// client tunnel IP, from that member's port-type AllowedApps.
+func (s *Store) PortGrants() []PortGrant {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var grants []PortGrant
+	for i := range s.members {
+		m := &s.members[i]
+		if m.Status != "" && m.Status != "active" {
+			continue
+		}
+		var tcp, udp []int
+		for _, app := range m.AllowedApps {
+			if !app.IsPort() || app.Port < 1 || app.Port > 65535 {
+				continue
+			}
+			switch app.Protocol {
+			case "tcp", "http", "https": // http/https are L7 hints; firewall-wise TCP
+				tcp = append(tcp, app.Port)
+			case "udp":
+				udp = append(udp, app.Port)
+			}
+		}
+		if len(tcp) == 0 && len(udp) == 0 {
+			continue
+		}
+		for _, c := range m.Clients {
+			if c.TunnelIP == "" {
+				continue
+			}
+			grants = append(grants, PortGrant{TunnelIP: c.TunnelIP, TCP: tcp, UDP: udp})
+		}
+	}
+	return grants
 }
 
 func (s *Store) rebuildIndexes() {

@@ -40,6 +40,10 @@ type Handlers struct {
 	// Nil until SetUpstreamSender wires it; callers must nil-check.
 	sendUpstream func(ctx context.Context, msg atreolink.TunnelMessage) error
 
+	// Recomputes raw-port firewall grants after an ACL change. Nil-check;
+	// a callback keeps this package free of a firewall import.
+	firewallReconcile func(ctx context.Context)
+
 	// Fail-closed liveness (lazily initialised at first use).
 	livenessOnce sync.Once
 	live         *livenessState
@@ -47,6 +51,10 @@ type Handlers struct {
 
 func (h *Handlers) SetUpstreamSender(fn func(ctx context.Context, msg atreolink.TunnelMessage) error) {
 	h.sendUpstream = fn
+}
+
+func (h *Handlers) SetFirewallReconcile(fn func(ctx context.Context)) {
+	h.firewallReconcile = fn
 }
 
 // ClientRegisterPayload is the member-signed client registration envelope.
@@ -433,6 +441,24 @@ func (h *Handlers) HandleProvision(msg atreolink.TunnelMessage) (*atreolink.Tunn
 		CorrelationID: msg.CorrelationID,
 		Payload:       respPayload,
 	}, nil
+}
+
+// validateApp checks a port app's port/protocol or a proxy app's URL.
+// http/https are L7 hints for clients (open as a link); the firewall treats
+// them as TCP like any other port.
+func validateApp(a atreolink.App) error {
+	if a.IsPort() {
+		if a.Port < 1 || a.Port > 65535 {
+			return fmt.Errorf("app:upserted: port %d out of range (1-65535)", a.Port)
+		}
+		switch a.Protocol {
+		case "tcp", "udp", "http", "https":
+		default:
+			return fmt.Errorf("app:upserted: protocol %q not allowed (tcp/udp/http/https)", a.Protocol)
+		}
+		return nil
+	}
+	return validateInternalURL(a.InternalURL)
 }
 
 // Host is unconstrained (operators use LAN hostnames and Docker names);

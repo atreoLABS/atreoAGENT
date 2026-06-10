@@ -420,6 +420,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		a.certs, a.customDomainStore,
 	)
 	handlers.SetUpstreamSender(a.tunnel.Send)
+	handlers.SetFirewallReconcile(a.reconcileFirewallGrants)
 	handlers.RegisterAll(a.tunnel)
 	handlers.StartReapers(ctx)
 	handlers.StartLivenessWatch(ctx)
@@ -869,5 +870,24 @@ func (a *Agent) reconcilePeers() {
 		if err := a.aclStore.Save(); err != nil {
 			logging.Warn("Warning: failed to save ACL: %v", err)
 		}
+	}
+
+	a.reconcileFirewallGrants(context.Background())
+}
+
+// reconcileFirewallGrants pushes the ACL's per-peer raw-port grants to the
+// firewall. No-op when the firewall is disabled or the grants are unchanged.
+func (a *Agent) reconcileFirewallGrants(ctx context.Context) {
+	if a.firewall == nil {
+		return
+	}
+	src := a.aclStore.PortGrants()
+	grants := make([]firewall.PortGrant, 0, len(src))
+	for _, g := range src {
+		grants = append(grants, firewall.PortGrant{SourceIP: g.TunnelIP, TCP: g.TCP, UDP: g.UDP})
+	}
+	logging.Debug("firewall: %d raw-port peer-grant(s) from ACL", len(grants))
+	if err := a.firewall.SetPortGrants(ctx, grants); err != nil {
+		logging.Warn("Warning: failed to apply firewall port grants: %v", err)
 	}
 }

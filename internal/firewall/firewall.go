@@ -25,10 +25,19 @@ type Config struct {
 	AllowedTCPPorts []int  // ports peers may reach (the proxy HTTP/HTTPS)
 }
 
+// PortGrant lets one peer (by tunnel source IP) reach a set of raw host ports.
+type PortGrant struct {
+	SourceIP string
+	TCP      []int
+	UDP      []int
+}
+
 type Manager struct {
 	cfg     Config
 	mu      sync.Mutex
 	enabled bool
+	// Re-emitted on every Apply so they survive a watchdog re-apply / flush.
+	portGrants []PortGrant
 }
 
 func NewManager(c Config) *Manager {
@@ -80,12 +89,29 @@ func (m *Manager) Apply(ctx context.Context) error {
 			return fmt.Errorf("allow tcp/%d: %w", port, err)
 		}
 	}
+
+	// Host-native services: source-scoped ACCEPTs above the terminal DROP.
+	for _, args := range portGrantRules(inputChain, m.portGrants) {
+		if err := run(ctx, "iptables", args...); err != nil {
+			m.teardown(ctx)
+			return fmt.Errorf("port grant input rule %v: %w", args, err)
+		}
+	}
+
 	if err := run(ctx, "iptables", "-A", inputChain, "-j", "DROP"); err != nil {
 		m.teardown(ctx)
 		return fmt.Errorf("input drop: %w", err)
 	}
 
-	// Block all forwarded traffic from peers onto any other interface.
+	// Docker publishes container ports via DNAT, so they traverse FORWARD, not
+	// INPUT. Return traffic rides Docker's own forward rules.
+	for _, args := range portGrantRules(forwardChain, m.portGrants) {
+		if err := run(ctx, "iptables", args...); err != nil {
+			m.teardown(ctx)
+			return fmt.Errorf("port grant forward rule %v: %w", args, err)
+		}
+	}
+
 	if err := run(ctx, "iptables", "-A", forwardChain, "-j", "DROP"); err != nil {
 		m.teardown(ctx)
 		return fmt.Errorf("forward drop: %w", err)
@@ -105,6 +131,75 @@ func (m *Manager) Apply(ctx context.Context) error {
 	m.enabled = true
 	logging.Info("firewall: tunnel access on %s restricted to TCP %v + ICMP", m.cfg.Iface, m.cfg.AllowedTCPPorts)
 	return nil
+}
+
+// SetPortGrants swaps the grants and rebuilds. No-op when unchanged.
+func (m *Manager) SetPortGrants(ctx context.Context, grants []PortGrant) error {
+	m.mu.Lock()
+	if grantsEqual(m.portGrants, grants) {
+		m.mu.Unlock()
+		return nil
+	}
+	m.portGrants = grants
+	enabled := m.enabled
+	m.mu.Unlock()
+
+	// Stored until the first Apply (startup) emits them once the chain exists.
+	if !enabled {
+		return nil
+	}
+	return m.Apply(ctx)
+}
+
+// portGrantRules expands grants into iptables arg vectors for chain, one per
+// (ip, proto, port).
+func portGrantRules(chain string, grants []PortGrant) [][]string {
+	var rules [][]string
+	for _, g := range grants {
+		if g.SourceIP == "" {
+			continue
+		}
+		for _, port := range g.TCP {
+			if port <= 0 {
+				continue
+			}
+			rules = append(rules, []string{"-A", chain,
+				"-s", g.SourceIP, "-p", "tcp", "--dport", strconv.Itoa(port), "-j", "ACCEPT"})
+		}
+		for _, port := range g.UDP {
+			if port <= 0 {
+				continue
+			}
+			rules = append(rules, []string{"-A", chain,
+				"-s", g.SourceIP, "-p", "udp", "--dport", strconv.Itoa(port), "-j", "ACCEPT"})
+		}
+	}
+	return rules
+}
+
+func grantsEqual(a, b []PortGrant) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].SourceIP != b[i].SourceIP ||
+			!intsEqual(a[i].TCP, b[i].TCP) || !intsEqual(a[i].UDP, b[i].UDP) {
+			return false
+		}
+	}
+	return true
+}
+
+func intsEqual(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // Re-applies if the INPUT jump disappears (firewalld reload, `iptables

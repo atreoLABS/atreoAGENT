@@ -25,6 +25,16 @@ type App struct {
 	Slug        string `json:"slug"`
 	InternalURL string `json:"internalUrl"`
 	Icon        string `json:"icon"`
+	// Type is "port" for a raw host port or "" / "proxy" for an HTTP service.
+	Type string `json:"type,omitempty"`
+	Port int    `json:"port,omitempty"`
+	// "tcp" | "udp" | "http" | "https", port apps only. http/https are L7
+	// hints so clients open the port as a link; the firewall treats them as tcp.
+	Protocol string `json:"protocol,omitempty"`
+}
+
+func (a *App) IsPort() bool {
+	return a.Type == "port"
 }
 
 // EffectiveSlug returns the slug, deriving from Name if empty.

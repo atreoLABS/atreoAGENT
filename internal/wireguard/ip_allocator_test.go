@@ -173,3 +173,64 @@ func TestMarkUsedPreventsCollisionAfterCrash(t *testing.T) {
 		t.Errorf("Lookup keyB = %q, want %q", got, ipB)
 	}
 }
+
+func TestTryAdoptRejectsCollisionWithOtherPeer(t *testing.T) {
+	a := newTestAllocator(t)
+	ip, err := a.Allocate("peerB")
+	if err != nil {
+		t.Fatalf("Allocate: %v", err)
+	}
+	// peerA must not be able to take peerB's IP.
+	if a.TryAdopt("peerA", ip) {
+		t.Fatalf("TryAdopt let peerA steal peerB's IP %q", ip)
+	}
+	if got := a.Lookup("peerA"); got != "" {
+		t.Errorf("peerA allocation = %q, want empty", got)
+	}
+	if got := a.Lookup("peerB"); got != ip {
+		t.Errorf("peerB allocation = %q, want %q (unchanged)", got, ip)
+	}
+}
+
+func TestTryAdoptRejectsReservedOutOfSubnetAndMalformed(t *testing.T) {
+	for _, ip := range []string{
+		"100.64.0.1",   // server IP (reserved)
+		"100.64.0.0",   // network (reserved)
+		"100.64.0.255", // broadcast (reserved)
+		"10.0.0.5",     // outside the /24
+		"0.0.0.0/0",    // CIDR, not a host literal
+		"100.64.0.05",  // non-canonical (leading zero)
+		"not-an-ip",
+		"",
+	} {
+		if a := newTestAllocator(t); a.TryAdopt("peer", ip) {
+			t.Errorf("TryAdopt accepted unsafe IP %q", ip)
+		}
+	}
+}
+
+func TestTryAdoptAcceptsFreeInSubnetAddressAndIsIdempotent(t *testing.T) {
+	a := newTestAllocator(t)
+	if !a.TryAdopt("peer", "100.64.0.50") {
+		t.Fatal("TryAdopt rejected a free, in-subnet address")
+	}
+	if got := a.Lookup("peer"); got != "100.64.0.50" {
+		t.Errorf("Lookup = %q, want 100.64.0.50", got)
+	}
+	// Re-adopting the same IP for the same peer is a no-op success; a
+	// different free IP must not silently move an existing allocation.
+	if !a.TryAdopt("peer", "100.64.0.50") {
+		t.Error("TryAdopt not idempotent for the same (peer, ip)")
+	}
+	if a.TryAdopt("peer", "100.64.0.51") {
+		t.Error("TryAdopt silently moved an existing allocation")
+	}
+	// The adopted IP is now reserved against a fresh allocation.
+	other, err := a.Allocate("other")
+	if err != nil {
+		t.Fatalf("Allocate: %v", err)
+	}
+	if other == "100.64.0.50" {
+		t.Error("Allocate handed out an already-adopted IP")
+	}
+}

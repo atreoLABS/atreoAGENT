@@ -110,6 +110,9 @@ type ProvisionResponsePayload struct {
 	AllowedIPs          string `json:"allowedIPs"`
 	PersistentKeepalive int    `json:"persistentKeepalive"`
 	NASSignature        string `json:"nasSignature"`
+	// IPLease is the agent's signed proof of this pubkey→tunnelIP binding,
+	// replayed back later to restore the IP. Clients ignore it.
+	IPLease *atreolink.TunnelIPLease `json:"ipLease,omitempty"`
 }
 
 // Both sides feed these into the v2 server transcript, so divergence
@@ -424,6 +427,12 @@ func (h *Handlers) HandleProvision(msg atreolink.TunnelMessage) (*atreolink.Tunn
 		return nil, fmt.Errorf("sign provision response: %w", err)
 	}
 
+	// Self-signed lease so this IP can be restored later (see TunnelIPLease).
+	ipLease, err := MintTunnelIPLease(h.deviceID, clientKey, tunnelIP, h.keyManager.PrivateKey())
+	if err != nil {
+		return nil, fmt.Errorf("mint ip lease: %w", err)
+	}
+
 	respPayload := mustMarshal(ProvisionResponsePayload{
 		ServerPublicKey:     serverPubKey,
 		TunnelIP:            tunnelIP,
@@ -432,6 +441,7 @@ func (h *Handlers) HandleProvision(msg atreolink.TunnelMessage) (*atreolink.Tunn
 		AllowedIPs:          wgQuickAllowedIPs,
 		PersistentKeepalive: wgQuickPersistentKeepalive,
 		NASSignature:        sig,
+		IPLease:             ipLease,
 	})
 
 	logging.Info("Provisioned peer for member %s: IP %s", entry.MemberID, tunnelIP)

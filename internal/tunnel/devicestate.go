@@ -208,6 +208,9 @@ func (h *Handlers) HandleDeviceState(msg atreolink.TunnelMessage) (*atreolink.Tu
 	// not announce admission we didn't actually carry out.
 	var pendingAdmittance []*atreolink.AdmittanceCertificate
 
+	// IPs restorable from a lease this agent itself signed, keyed by pubkey.
+	leaseIP := make(map[string]string)
+
 	vMembers := make([]atreolink.MemberACLEntry, 0, len(st.Members))
 	for _, dm := range st.Members {
 		entry := atreolink.MemberACLEntry{
@@ -336,9 +339,17 @@ func (h *Handlers) HandleDeviceState(msg atreolink.TunnelMessage) (*atreolink.Tu
 			if cp.MemberID != dm.MemberID || cp.PublicKey != dc.WGPublicKey {
 				return nil, fmt.Errorf("device:state rejected: member %s client registration payload mismatch", dm.MemberID)
 			}
+			// A lease verifying under our own key restores the IP we issued;
+			// a bad one is ignored (it grants nothing), never fatal.
+			if dc.IPLease != nil {
+				if err := VerifyTunnelIPLease(dc.IPLease, h.deviceID, dc.WGPublicKey, h.keyManager.PublicKey()); err != nil {
+					logging.Warn("device:state: ignoring invalid IP lease for %s: %v", shortKey(dc.WGPublicKey), err)
+				} else {
+					leaseIP[dc.WGPublicKey] = dc.IPLease.TunnelIP
+				}
+			}
 			entry.Clients = append(entry.Clients, atreolink.ClientRecord{
 				WGPublicKey: dc.WGPublicKey,
-				TunnelIP:    dc.TunnelIP,
 				Label:       dc.Label,
 				Platform:    dc.Platform,
 			})
@@ -347,19 +358,21 @@ func (h *Handlers) HandleDeviceState(msg atreolink.TunnelMessage) (*atreolink.Tu
 		vMembers = append(vMembers, entry)
 	}
 
-	// Pre-sync the allocator so reconcile keeps each client's existing IP.
+	// The agent owns the pubkey→tunnelIP binding. An existing allocation
+	// wins; an unknown pubkey is restored only from a verified lease into a
+	// free address; otherwise allocate our own.
 	for mi := range vMembers {
 		for ci := range vMembers[mi].Clients {
 			c := &vMembers[mi].Clients[ci]
 			if c.WGPublicKey == "" {
 				continue
 			}
-			if c.TunnelIP != "" {
-				h.allocator.MarkUsed(c.WGPublicKey, c.TunnelIP)
-				continue
-			}
 			if ip := h.allocator.Lookup(c.WGPublicKey); ip != "" {
 				c.TunnelIP = ip
+				continue
+			}
+			if lip := leaseIP[c.WGPublicKey]; lip != "" && h.allocator.TryAdopt(c.WGPublicKey, lip) {
+				c.TunnelIP = lip
 				continue
 			}
 			ip, aerr := h.allocator.Allocate(c.WGPublicKey)

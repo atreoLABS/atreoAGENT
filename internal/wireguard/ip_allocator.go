@@ -3,6 +3,7 @@ package wireguard
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -105,6 +106,42 @@ func (a *IPAllocator) MarkUsed(clientPubKey, ip string) {
 	if clientPubKey != "" {
 		a.allocated[clientPubKey] = ip
 	}
+}
+
+// TryAdopt records a tunnel IP for a not-yet-known pubkey, but only when it is
+// safe: a canonical IPv4 in this allocator's /24, not reserved, and not held
+// by another pubkey. Returns false otherwise so the caller falls back to
+// Allocate. Used to restore an IP from the agent's own signed lease; the
+// collision check refuses a stale lease whose IP was since reissued.
+func (a *IPAllocator) TryAdopt(clientPubKey, ip string) bool {
+	if clientPubKey == "" || ip == "" {
+		return false
+	}
+	parsed := net.ParseIP(ip)
+	if parsed == nil || parsed.To4() == nil || parsed.String() != ip {
+		return false // unparseable, IPv6, or non-canonical (e.g. leading zeros)
+	}
+	if !strings.HasPrefix(ip, a.prefix+".") {
+		return false // outside this allocator's subnet
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if cur, ok := a.allocated[clientPubKey]; ok {
+		return cur == ip // idempotent if already ours; never silently move
+	}
+	for pk, held := range a.allocated {
+		if held == ip && pk != clientPubKey {
+			return false // already held by a different peer
+		}
+	}
+	if a.usedIPs[ip] {
+		return false // reserved (server IP, network, or broadcast)
+	}
+	a.usedIPs[ip] = true
+	a.allocated[clientPubKey] = ip
+	return true
 }
 
 // Release frees the IP allocated to the given client public key.

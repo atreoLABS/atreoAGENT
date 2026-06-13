@@ -125,10 +125,23 @@ func (e *DSEnvelope) AsMessage(msgType string) TunnelMessage {
 
 type DSClient struct {
 	WGPublicKey          string      `json:"wgPublicKey"`
-	TunnelIP             string      `json:"tunnelIp,omitempty"`
 	Label                string      `json:"label,omitempty"`
 	Platform             string      `json:"platform,omitempty"`
 	RegistrationEnvelope *DSEnvelope `json:"registrationEnvelope"`
+	// IPLease is the agent's signed proof of the IP it issued for this
+	// pubkey; re-verified against its own key. See TunnelIPLease.
+	IPLease *TunnelIPLease `json:"ipLease,omitempty"`
+}
+
+// TunnelIPLease is the agent's self-signed binding of (deviceId, wgPublicKey)
+// to a tunnel IP it allocated, replayed back later so it can restore the same
+// IP after losing local state. NASSignature is Ed25519 over the canonical JSON
+// of {deviceId, wgPublicKey, tunnelIp}.
+type TunnelIPLease struct {
+	DeviceID     string `json:"deviceId"`
+	WGPublicKey  string `json:"wgPublicKey"`
+	TunnelIP     string `json:"tunnelIp"`
+	NASSignature string `json:"nasSignature"`
 }
 
 type DSMember struct {

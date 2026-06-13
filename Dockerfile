@@ -12,7 +12,7 @@ ARG DATE=
 RUN git config --global --add safe.directory /src && \
     go build -ldflags "-X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" -o /atreoagent ./cmd/atreoagent
 
-FROM alpine:3.23
+FROM alpine:3.24
 RUN apk --no-cache upgrade && \
     apk add --no-cache ca-certificates iproute2 wireguard-tools iptables
 COPY --from=build /atreoagent /usr/local/bin/

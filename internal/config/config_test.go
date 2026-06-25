@@ -183,6 +183,27 @@ func TestEnvOverride(t *testing.T) {
 	}
 }
 
+func TestRelayForceEnv(t *testing.T) {
+	t.Setenv("DATA_DIR", "/tmp/atreo-test")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Relay.Force {
+		t.Error("Relay.Force should default false")
+	}
+
+	t.Setenv("RELAY_FORCE", "true")
+	cfg, err = Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.Relay.Force {
+		t.Error("RELAY_FORCE=true should set Relay.Force")
+	}
+}
+
 func TestHelperPaths(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.DataDir = "/data"

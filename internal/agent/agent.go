@@ -25,6 +25,7 @@ import (
 	"github.com/atreoLABS/atreoAGENT/internal/notify"
 	"github.com/atreoLABS/atreoAGENT/internal/probe"
 	"github.com/atreoLABS/atreoAGENT/internal/proxy"
+	"github.com/atreoLABS/atreoAGENT/internal/relay"
 	"github.com/atreoLABS/atreoAGENT/internal/smtp"
 	"github.com/atreoLABS/atreoAGENT/internal/store"
 	"github.com/atreoLABS/atreoAGENT/internal/tunnel"
@@ -361,7 +362,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	if upnpEnabled {
 		go func() {
 			mapCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-			_, mappedPort, err := a.upnp.TryMapping(mapCtx)
+			extIP, mappedPort, err := a.upnp.TryMapping(mapCtx)
 			cancel()
 			switch {
 			case err != nil:
@@ -377,6 +378,11 @@ func (a *Agent) Run(ctx context.Context) error {
 			case mappedPort != wgPort:
 				logging.Error("ERROR: UPnP mapped external port %d but clients connect on %d. Forward UDP %d manually instead.", mappedPort, wgPort, wgPort)
 				a.clearPortMappingAlertCooldown()
+			case !classifyMappedIP(extIP).usablePublic():
+				// Mapped, but the gateway's WAN IP is carrier-NAT/private — not
+				// reachable from the internet, so the relay carries traffic.
+				logging.Warn("UPnP mapped UDP %d but gateway WAN IP %s is carrier-NAT/private; using the relay.", mappedPort, extIP)
+				a.cgnatRelayAlert(ctx)
 			default:
 				logging.Info("UPnP/NAT-PMP mapped UDP %d", mappedPort)
 				a.clearPortMappingAlertCooldown()
@@ -421,6 +427,60 @@ func (a *Agent) Run(ctx context.Context) error {
 	)
 	handlers.SetUpstreamSender(a.tunnel.Send)
 	handlers.SetFirewallReconcile(a.reconcileFirewallGrants)
+
+	// Relay client: register with the relay the coordination service grants, and
+	// expose its endpoint as the provision fallback Endpoint.
+	relayEnabled := a.cfg.Relay.Enabled != nil && *a.cfg.Relay.Enabled
+	// Fallback-only: relay when there's no usable public inbound path. Operators
+	// who hand-forward a port set endpoint_ip to keep the direct path. Force keeps
+	// a relay session up even with a public path, so the endpoint stays offerable.
+	forceRelay := a.cfg.Relay.Force
+	shouldRelay := func() bool { return forceRelay || a.relayNeeded() }
+	relayMgr := relay.NewManager(a.keyManager, a.cfg.WireGuard.ListenPort, relayEnabled, shouldRelay)
+	handlers.SetRelayEndpoint(relayMgr.Endpoint)
+	// Ask for a grant only when the relay is needed; a non-empty failedHost
+	// requests a move off an unreachable node. The grant returns as relay:grant.
+	relayMgr.SetRequester(func(ctx context.Context, failedHost string) error {
+		var payload json.RawMessage
+		if failedHost != "" {
+			payload, _ = json.Marshal(map[string]string{"failedRelayHost": failedHost})
+		}
+		return a.tunnel.Send(ctx, atreolink.TunnelMessage{Type: "relay:grant:request", Payload: payload})
+	})
+	// Keep a relay session up even with a public path while manual relay configs
+	// depend on it (the coordination service tracks them and tells us).
+	a.tunnel.RegisterHandler("relay:keepalive", func(msg atreolink.TunnelMessage) (*atreolink.TunnelMessage, error) {
+		var p struct {
+			Keep bool `json:"keep"`
+		}
+		if len(msg.Payload) > 0 {
+			if err := json.Unmarshal(msg.Payload, &p); err != nil {
+				return nil, fmt.Errorf("relay:keepalive: %w", err)
+			}
+		}
+		relayMgr.SetKeepAlive(p.Keep)
+		return nil, nil
+	})
+	a.tunnel.RegisterHandler("relay:grant", func(msg atreolink.TunnelMessage) (*atreolink.TunnelMessage, error) {
+		var sg relay.SignedGrant
+		if err := json.Unmarshal(msg.Payload, &sg); err != nil {
+			return nil, fmt.Errorf("relay:grant: %w", err)
+		}
+		if err := relayMgr.SetGrant(sg); err != nil {
+			logging.Warn("relay: ignoring grant: %v", err)
+		}
+		return nil, nil
+	})
+	relayMgr.Start(ctx)
+
+	// Watch transport reachability: report it to the coordination service (a UI
+	// hint) and, on a genuine flip to relay-only, warn holders of manual 'direct'
+	// configs that their pinned endpoint broke. Needs the relay enabled —
+	// otherwise there's nothing to switch to.
+	if relayEnabled {
+		go a.reportTransport(ctx)
+	}
+
 	handlers.RegisterAll(a.tunnel)
 	handlers.StartReapers(ctx)
 	handlers.StartLivenessWatch(ctx)
@@ -471,6 +531,9 @@ func (a *Agent) Run(ctx context.Context) error {
 	})
 
 	a.tunnel.SetOnConnect(func() []atreolink.TunnelMessage {
+		// Tunnel is now attached: nudge the relay client so it requests a grant
+		// straight away (if it needs one) rather than waiting out its retry timer.
+		relayMgr.Wake()
 		payload, _ := json.Marshal(map[string]int{
 			"proxyHttpsPort": a.cfg.Proxy.HTTPSPort,
 		})
@@ -591,7 +654,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			}
 
 			renewCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			_, newPort, err := a.upnp.RenewMapping(renewCtx)
+			newIP, newPort, err := a.upnp.RenewMapping(renewCtx)
 			cancel()
 			if err != nil {
 				// Logged every cycle on purpose — a standing reminder
@@ -614,6 +677,16 @@ func (a *Agent) Run(ctx context.Context) error {
 						renewalFailNotified = true
 					}
 				}
+				continue
+			}
+
+			// A renewed mapping with a CGNAT/private WAN IP still isn't
+			// reachable from the internet — keep relaying and remind the owner
+			// (cooldowned) rather than treating it as a healthy direct path.
+			if !classifyMappedIP(newIP).usablePublic() {
+				a.cgnatRelayAlert(ctx)
+				renewalFailures = 0
+				renewalFailNotified = false
 				continue
 			}
 
@@ -802,6 +875,145 @@ func (a *Agent) portMappingAlert(ctx context.Context, req *notify.NotifyRequest)
 		return true
 	}
 	return false
+}
+
+// cgnatRelayAlert tells the owner the connection is carrier-NAT'd, so a direct
+// path isn't possible and the relay is carrying traffic. Shares the 24h
+// port-mapping cooldown (at most one alert per day).
+func (a *Agent) cgnatRelayAlert(ctx context.Context) {
+	a.portMappingAlert(ctx, &notify.NotifyRequest{
+		Title:    "Using relay (carrier-grade NAT)",
+		Body:     "Your internet connection appears to use carrier-grade NAT, so a direct connection isn't possible. Remote access is working through the relay.",
+		Severity: "info",
+	})
+}
+
+// relayNeeded reports genuine reachability: true when the agent has no usable
+// public inbound path. Excludes force-relay and keep-alive, so it reflects the
+// real CGNAT state — used both to gate the relay session and to report transport.
+func (a *Agent) relayNeeded() bool {
+	ip, port := a.upnp.PublicEndpoint()
+	return relayWanted(a.cfg.EndpointIP, ip, port)
+}
+
+// reportTransport watches the agent's transport reachability. On every change it
+// reports it to the coordination service (device:transport) as a UI hint, and on
+// a genuine flip to relay-only it warns holders of manual 'direct' configs that
+// their pinned endpoint broke (see warnDirectConfigHolders). It reflects genuine
+// reachability only (force-relay and keep-alive are excluded) and debounces the
+// flip to relay — two consecutive reads — so a transient UPnP miss isn't mistaken
+// for a lost path; recovery to a direct path is handled at once.
+func (a *Agent) reportTransport(ctx context.Context) {
+	const checkInterval = 30 * time.Second
+	last := transportUnknown // last state reported (unknown = none yet)
+	relayStreak := 0         // consecutive relay reads, for the debounce
+	// Let the startup UPnP mapping settle before the first read.
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(checkInterval):
+	}
+	t := time.NewTicker(checkInterval)
+	defer t.Stop()
+	for {
+		cur := transportDirect
+		if a.relayNeeded() {
+			cur = transportRelay
+		}
+		if cur == transportRelay {
+			relayStreak++
+		} else {
+			relayStreak = 0
+		}
+		if report := transportReportDecision(cur, last, relayStreak); report != transportUnknown {
+			switch report {
+			case transportRelay:
+				a.warnDirectConfigHolders(ctx)
+			case transportDirect:
+				// Recovered to a direct path — re-arm so the next loss warns again.
+				a.clearDirectWarnMarker()
+			}
+			payload, _ := json.Marshal(map[string]bool{"usingRelay": report == transportRelay})
+			// Advance last only on a successful send; the next tick retries otherwise.
+			if err := a.tunnel.Send(ctx, atreolink.TunnelMessage{Type: "device:transport", Payload: payload}); err == nil {
+				last = report
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
+// warnDirectConfigHolders warns every active member who holds a manual ('other')
+// peer pinned to the 'direct' endpoint that the server has lost its public path
+// and is now relay-only, so their static config must be re-downloaded as a relay
+// config. Recipients come from the agent's own ACL (endpoint_type tags) and the
+// notice is sealed per-recipient — neither the recipient list nor the text comes
+// from the coordination service.
+//
+// A persisted marker makes this fire once per relay episode: a restart while
+// still relay-only won't re-warn (the marker survives), and it is cleared on
+// recovery to a direct path so a later loss warns afresh.
+func (a *Agent) warnDirectConfigHolders(ctx context.Context) {
+	if a.notifyServer == nil || a.directWarnMarkerSet() {
+		return
+	}
+	warned := 0
+	for _, m := range a.aclStore.AllMembers() {
+		if m.Status != "" && m.Status != "active" {
+			continue
+		}
+		if !hasDirectConfig(m.Clients) {
+			continue
+		}
+		member := m
+		req := &notify.NotifyRequest{
+			Title:    "Direct connection unavailable",
+			Body:     "Your server lost its direct connection and is now reachable only through the relay. Any manual WireGuard config set up for a direct connection has stopped working — re-download it as a relay config to restore access.",
+			Severity: "warning",
+		}
+		if err := a.notifyServer.SendToMember(ctx, &member, req); err != nil {
+			logging.Warn("transport-relay warning: send to %s failed: %v", member.UserID, err)
+			continue
+		}
+		warned++
+	}
+	// Mark even when nobody needed warning, so a restart doesn't re-scan; the
+	// marker is cleared on recovery to a direct path.
+	a.setDirectWarnMarker()
+	if warned > 0 {
+		logging.Info("Warned %d member(s) with manual direct configs that the server is now relay-only", warned)
+	}
+}
+
+func hasDirectConfig(clients []atreolink.ClientRecord) bool {
+	for _, c := range clients {
+		if c.Platform == "other" && c.EndpointType == "direct" {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *Agent) directWarnMarkerSet() bool {
+	_, err := os.Stat(a.cfg.TransportRelayWarnPath())
+	return err == nil
+}
+
+func (a *Agent) setDirectWarnMarker() {
+	f, err := os.Create(a.cfg.TransportRelayWarnPath())
+	if err != nil {
+		logging.Warn("transport-relay warning: marker write failed: %v", err)
+		return
+	}
+	_ = f.Close()
+}
+
+func (a *Agent) clearDirectWarnMarker() {
+	_ = os.Remove(a.cfg.TransportRelayWarnPath())
 }
 
 // reconcilePeers re-aligns WireGuard peers with the ACL on startup.

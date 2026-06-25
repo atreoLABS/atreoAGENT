@@ -202,6 +202,37 @@ func TestRelayForceEnv(t *testing.T) {
 	if !cfg.Relay.Force {
 		t.Error("RELAY_FORCE=true should set Relay.Force")
 	}
+
+	// An explicit RELAY_FORCE=0 must clear a YAML/default-set force.
+	forced := &Config{Relay: RelayConfig{Force: true}}
+	t.Setenv("RELAY_FORCE", "0")
+	applyEnvOverrides(forced)
+	if forced.Relay.Force {
+		t.Error("RELAY_FORCE=0 should clear Relay.Force")
+	}
+}
+
+// RELAY_ENABLED is a *bool override: it must be able to both disable a
+// default-true config and re-enable a config that was set false.
+func TestRelayEnabledEnv(t *testing.T) {
+	t.Run("disable", func(t *testing.T) {
+		t.Setenv("RELAY_ENABLED", "false")
+		cfg := DefaultConfig() // Enabled defaults true
+		applyEnvOverrides(cfg)
+		if cfg.Relay.Enabled == nil || *cfg.Relay.Enabled {
+			t.Errorf("RELAY_ENABLED=false should set Relay.Enabled to false, got %v", cfg.Relay.Enabled)
+		}
+	})
+
+	t.Run("enable", func(t *testing.T) {
+		t.Setenv("RELAY_ENABLED", "1")
+		f := false
+		cfg := &Config{Relay: RelayConfig{Enabled: &f}}
+		applyEnvOverrides(cfg)
+		if cfg.Relay.Enabled == nil || !*cfg.Relay.Enabled {
+			t.Errorf("RELAY_ENABLED=1 should set Relay.Enabled to true, got %v", cfg.Relay.Enabled)
+		}
+	})
 }
 
 func TestHelperPaths(t *testing.T) {

@@ -32,6 +32,16 @@ type Config struct {
 	Certs           CertsConfig     `yaml:"certs"`
 	Notify          NotifyConfig    `yaml:"notify"`
 	SMTP            SMTPConfig      `yaml:"smtp"`
+	Relay           RelayConfig     `yaml:"relay"`
+}
+
+// RelayConfig gates the relay client. Enabled is *bool so an explicit `false`
+// in YAML survives the default (default: true); it lets an operator opt out of
+// relaying. Force keeps a relay session up even with a public path, so the relay
+// endpoint stays offerable (default false).
+type RelayConfig struct {
+	Enabled *bool `yaml:"enabled,omitempty"`
+	Force   bool  `yaml:"force,omitempty"`
 }
 
 // LAN-only SMTP-to-push gateway. AUTH (PLAIN/LOGIN, password = notify
@@ -113,6 +123,7 @@ func DefaultConfig() *Config {
 		Certs: CertsConfig{
 			CertDir: "/var/lib/atreoagent/certs",
 		},
+		Relay: RelayConfig{Enabled: &enabled},
 	}
 }
 
@@ -213,6 +224,10 @@ func applyDefaults(cfg *Config) {
 		t := true
 		cfg.Proxy.Enabled = &t
 	}
+	if cfg.Relay.Enabled == nil {
+		t := true
+		cfg.Relay.Enabled = &t
+	}
 }
 
 func applyEnvOverrides(cfg *Config) {
@@ -249,6 +264,18 @@ func applyEnvOverrides(cfg *Config) {
 		cfg.WireGuard.PCPEnabled = false
 	} else if v == "true" || v == "1" {
 		cfg.WireGuard.PCPEnabled = true
+	}
+	if v := os.Getenv("RELAY_ENABLED"); v == "false" || v == "0" {
+		f := false
+		cfg.Relay.Enabled = &f
+	} else if v == "true" || v == "1" {
+		t := true
+		cfg.Relay.Enabled = &t
+	}
+	if v := os.Getenv("RELAY_FORCE"); v == "true" || v == "1" {
+		cfg.Relay.Force = true
+	} else if v == "false" || v == "0" {
+		cfg.Relay.Force = false
 	}
 	if v := os.Getenv("WG_IPV6_PINHOLE_ENABLED"); v == "false" || v == "0" {
 		f := false
@@ -425,4 +452,11 @@ func (c *Config) PortMappingAlertPath() string {
 
 func (c *Config) PinholePath() string {
 	return filepath.Join(c.DataDir, "pcp_nonces.json")
+}
+
+// Marker that the agent has warned 'direct'-config holders for the current
+// relay-only episode; its presence (not mtime) is the gate. Cleared on recovery
+// to a direct path so a later loss warns again.
+func (c *Config) TransportRelayWarnPath() string {
+	return filepath.Join(c.DataDir, "transport_relay_warned.marker")
 }

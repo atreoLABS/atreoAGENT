@@ -44,6 +44,12 @@ type Handlers struct {
 	// a callback keeps this package free of a firewall import.
 	firewallReconcile func(ctx context.Context)
 
+	// Returns the relay endpoint host:port + true when the agent is in relay
+	// mode (no public inbound path). The provision Endpoint then points at the
+	// relay instead of the agent's own host. Nil-check; relay mode is opt-in
+	// and a callback keeps this package free of a relay import.
+	relayEndpoint func() (string, bool)
+
 	// Fail-closed liveness (lazily initialised at first use).
 	livenessOnce sync.Once
 	live         *livenessState
@@ -55,6 +61,13 @@ func (h *Handlers) SetUpstreamSender(fn func(ctx context.Context, msg atreolink.
 
 func (h *Handlers) SetFirewallReconcile(fn func(ctx context.Context)) {
 	h.firewallReconcile = fn
+}
+
+// SetRelayEndpoint wires the relay-mode endpoint provider. When it returns a
+// host:port and true, provision signs that as the client's Endpoint so a CGNAT
+// client reaches this agent through the relay.
+func (h *Handlers) SetRelayEndpoint(fn func() (string, bool)) {
+	h.relayEndpoint = fn
 }
 
 // ClientRegisterPayload is the member-signed client registration envelope.
@@ -413,6 +426,14 @@ func (h *Handlers) HandleProvision(msg atreolink.TunnelMessage) (*atreolink.Tunn
 	serverPubKey := h.wgServer.PublicKey()
 	listenPort := h.wgServer.ListenPort()
 	endpoint := fmt.Sprintf("%s:%d", h.tunnelHost, listenPort)
+	// Relay fallback: when the agent has no public inbound path, sign the relay
+	// endpoint so off-LAN clients reach this agent through the relay. The client
+	// still prefers a LAN-direct candidate first; this is the fallback.
+	if h.relayEndpoint != nil {
+		if relayEP, ok := h.relayEndpoint(); ok {
+			endpoint = relayEP
+		}
+	}
 	sig, err := h.keyManager.SignProvisionResponse(crypto.ProvisionTranscriptInput{
 		NonceHex:            entry.Nonce,
 		ClientPubKeyB64:     clientKey,

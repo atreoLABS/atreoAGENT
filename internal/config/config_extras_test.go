@@ -137,9 +137,10 @@ func TestUPnPEnabled_YAMLFalseSurvivesAndEnvOverrides(t *testing.T) {
 func TestDataDirPaths(t *testing.T) {
 	c := &Config{DataDir: "/data"}
 	cases := map[string]string{
-		c.PinholePath():          "/data/pcp_nonces.json",
-		c.CustomDomainPath():     "/data/custom_domain.json",
-		c.PortMappingAlertPath(): "/data/port_mapping_alert.cooldown",
+		c.PinholePath():            "/data/pcp_nonces.json",
+		c.CustomDomainPath():       "/data/custom_domain.json",
+		c.PortMappingAlertPath():   "/data/port_mapping_alert.cooldown",
+		c.TransportRelayWarnPath(): "/data/transport_relay_warned.marker",
 	}
 	for got, want := range cases {
 		if got != want {

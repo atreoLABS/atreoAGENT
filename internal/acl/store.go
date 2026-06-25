@@ -375,6 +375,9 @@ func (s *Store) UpsertMember(member atreolink.MemberACLEntry) error {
 					if in.Platform == "" {
 						in.Platform = prev.Platform
 					}
+					if in.EndpointType == "" {
+						in.EndpointType = prev.EndpointType
+					}
 					member.Clients[j] = in
 				}
 			}
@@ -461,6 +464,9 @@ func (s *Store) AddClient(memberID string, rec atreolink.ClientRecord) bool {
 				}
 				if rec.Platform == "" {
 					rec.Platform = c.Platform
+				}
+				if rec.EndpointType == "" {
+					rec.EndpointType = c.EndpointType
 				}
 				s.members[i].Clients[j] = rec
 				s.rebuildIndexes()

@@ -349,9 +349,10 @@ func (h *Handlers) HandleDeviceState(msg atreolink.TunnelMessage) (*atreolink.Tu
 				}
 			}
 			entry.Clients = append(entry.Clients, atreolink.ClientRecord{
-				WGPublicKey: dc.WGPublicKey,
-				Label:       dc.Label,
-				Platform:    dc.Platform,
+				WGPublicKey:  dc.WGPublicKey,
+				Label:        dc.Label,
+				Platform:     dc.Platform,
+				EndpointType: dc.EndpointType,
 			})
 		}
 

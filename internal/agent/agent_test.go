@@ -79,7 +79,7 @@ func TestNotifyOwner_AdminRole(t *testing.T) {
 	}
 
 	link := atreolink.NewClient(push.URL, agentTestKM(t), "tok")
-	
+
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestNotifyOwner_NoAdminEntry(t *testing.T) {
 	}
 
 	link := atreolink.NewClient(push.URL, agentTestKM(t), "tok")
-	
+
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,6 +148,111 @@ func TestNotifyOwner_NoAdminEntry(t *testing.T) {
 	}
 	if calls.Load() != 0 {
 		t.Errorf("expected no cloud calls, got %d", calls.Load())
+	}
+}
+
+func TestHasDirectConfig(t *testing.T) {
+	cases := []struct {
+		name    string
+		clients []atreolink.ClientRecord
+		want    bool
+	}{
+		{"manual direct", []atreolink.ClientRecord{{Platform: "other", EndpointType: "direct"}}, true},
+		{"manual relay", []atreolink.ClientRecord{{Platform: "other", EndpointType: "relay"}}, false},
+		{"manual local", []atreolink.ClientRecord{{Platform: "other", EndpointType: "local"}}, false},
+		{"app client", []atreolink.ClientRecord{{Platform: "ios"}}, false},
+		{"none", nil, false},
+		{"mixed has one direct", []atreolink.ClientRecord{
+			{Platform: "ios"},
+			{Platform: "other", EndpointType: "relay"},
+			{Platform: "other", EndpointType: "direct"},
+		}, true},
+	}
+	for _, c := range cases {
+		if got := hasDirectConfig(c.clients); got != c.want {
+			t.Errorf("%s: hasDirectConfig=%v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// warnDirectConfigHolders must notify exactly the active members holding a manual
+// 'direct' config, and the persisted marker must make it fire once per episode
+// until a recovery clears it.
+func TestWarnDirectConfigHolders(t *testing.T) {
+	var calls atomic.Int32
+	push := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/notifications" {
+			http.NotFound(w, r)
+			return
+		}
+		calls.Add(1)
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "{}")
+	}))
+	t.Cleanup(push.Close)
+
+	idKey := func(t *testing.T) string {
+		pub, _, err := ed25519.GenerateKey(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return base64.StdEncoding.EncodeToString(pub)
+	}
+
+	aclStore := acl.NewStore(filepath.Join(t.TempDir(), "acl.json"))
+	members := []atreolink.MemberACLEntry{
+		{ // warned: active, manual direct
+			MemberID: "m-direct", UserID: "u-direct", Role: "member", Status: "active",
+			IdentityKey: idKey(t),
+			Clients:     []atreolink.ClientRecord{{WGPublicKey: "k1", Platform: "other", EndpointType: "direct"}},
+		},
+		{ // skipped: relay config
+			MemberID: "m-relay", UserID: "u-relay", Role: "member", Status: "active",
+			IdentityKey: idKey(t),
+			Clients:     []atreolink.ClientRecord{{WGPublicKey: "k2", Platform: "other", EndpointType: "relay"}},
+		},
+		{ // skipped: app client picks the live path itself
+			MemberID: "m-app", UserID: "u-app", Role: "member", Status: "active",
+			IdentityKey: idKey(t),
+			Clients:     []atreolink.ClientRecord{{WGPublicKey: "k3", Platform: "ios"}},
+		},
+		{ // skipped: suspended, even with a direct config
+			MemberID: "m-susp", UserID: "u-susp", Role: "member", Status: "suspended",
+			IdentityKey: idKey(t),
+			Clients:     []atreolink.ClientRecord{{WGPublicKey: "k4", Platform: "other", EndpointType: "direct"}},
+		},
+	}
+	if err := aclStore.ReplaceAll(members); err != nil {
+		t.Fatalf("ReplaceAll: %v", err)
+	}
+
+	link := atreolink.NewClient(push.URL, agentTestKM(t), "tok")
+	srv, err := notify.NewServer(0, t.TempDir(), "agent-uuid", link, aclStore)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	a := &Agent{
+		cfg:          &config.Config{DataDir: t.TempDir()},
+		notifyServer: srv,
+		aclStore:     aclStore,
+	}
+
+	a.warnDirectConfigHolders(context.Background())
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("first warn: cloud calls=%d, want 1 (only the active manual-direct member)", got)
+	}
+
+	// Marker set → a re-entry (e.g. restart while still relay-only) must not re-warn.
+	a.warnDirectConfigHolders(context.Background())
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("second warn: cloud calls=%d, want 1 (marker should suppress)", got)
+	}
+
+	// Recovery to a direct path re-arms; the next loss warns again.
+	a.clearDirectWarnMarker()
+	a.warnDirectConfigHolders(context.Background())
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("third warn: cloud calls=%d, want 2 (marker cleared)", got)
 	}
 }
 
@@ -180,7 +285,7 @@ func TestPortMappingAlert_Cooldown(t *testing.T) {
 	}
 
 	link := atreolink.NewClient(push.URL, agentTestKM(t), "tok")
-	
+
 	if err != nil {
 		t.Fatal(err)
 	}

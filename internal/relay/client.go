@@ -313,7 +313,7 @@ func (m *Manager) runSession(ctx context.Context, sg SignedGrant, info Grant) (b
 	if err != nil {
 		return false, fmt.Errorf("dial relay control: %w", err)
 	}
-	defer conn.Close(websocket.StatusNormalClosure, "closing")
+	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "closing") }()
 
 	ready, err := m.authenticate(sctx, conn, sg, info)
 	if err != nil {
@@ -337,7 +337,7 @@ func (m *Manager) runSession(ctx context.Context, sg SignedGrant, info Grant) (b
 	if err != nil {
 		return false, fmt.Errorf("dial relay ingest: %w", err)
 	}
-	defer dataConn.Close()
+	defer func() { _ = dataConn.Close() }()
 
 	m.setEndpoint(net.JoinHostPort(host, strconv.Itoa(ready.DataPort)))
 	logging.Info("relay: session ready endpoint=%s ingest=%s", net.JoinHostPort(host, strconv.Itoa(ready.DataPort)), ingest)

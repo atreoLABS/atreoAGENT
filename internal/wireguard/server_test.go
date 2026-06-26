@@ -48,6 +48,62 @@ func TestDeriveTunnelIPv6(t *testing.T) {
 	}
 }
 
+func TestValidateTunnelIPv6(t *testing.T) {
+	cases := []struct {
+		name    string
+		ip      string
+		wantErr bool
+	}{
+		{"valid-ula", "fd00:64::1", false},
+		{"valid-global", "2001:db8::a", false},
+		{"empty", "", true},
+		{"garbage", "not-an-ip", true},
+		{"v4", "100.64.0.7", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateTunnelIPv6(tc.ip)
+			if (err != nil) != tc.wantErr {
+				t.Errorf("validateTunnelIPv6(%q) err=%v, wantErr=%v", tc.ip, err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestV6PrefixLen(t *testing.T) {
+	cases := []struct {
+		subnet string
+		want   int
+	}{
+		{"fd00:64::/64", 64},
+		{"fd00:64::/48", 48},
+		{"2001:db8::/56", 56},
+		{"", 64},           // unparseable → /64 fallback
+		{"garbage", 64},    // unparseable → /64 fallback
+		{"fd00:64::1", 64}, // missing mask → /64 fallback
+	}
+	for _, c := range cases {
+		if got := v6PrefixLen(c.subnet); got != c.want {
+			t.Errorf("v6PrefixLen(%q) = %d, want %d", c.subnet, got, c.want)
+		}
+	}
+}
+
+// TunnelIPv6 on a dual-stack server returns the 1:1-derived v6 for a valid v4
+// and degrades to "" when the input isn't a v4 literal (derivation fails).
+func TestServerTunnelIPv6_DualStack(t *testing.T) {
+	srv, _ := newTestServer(t) // configured with fd00:64::1 / fd00:64::/64
+	if got := srv.TunnelIPv6("100.64.0.7"); got != "fd00:64::7" {
+		t.Errorf("TunnelIPv6(100.64.0.7) = %q, want fd00:64::7", got)
+	}
+	if got := srv.TunnelIPv6("not-an-ip"); got != "" {
+		t.Errorf("TunnelIPv6(bad v4) = %q, want empty", got)
+	}
+	if got := srv.AllowedIPs(); got != "100.64.0.0/24,fd00:64::/64" {
+		t.Errorf("AllowedIPs dual-stack = %q, want 100.64.0.0/24,fd00:64::/64", got)
+	}
+}
+
 func TestServerTunnelIPv6_EmptyWhenUnconfigured(t *testing.T) {
 	dir := t.TempDir()
 	allocator, _ := NewIPAllocator("100.64.0.0/24", "100.64.0.1", filepath.Join(dir, "alloc.json"))

@@ -738,3 +738,165 @@ func TestGeneration_PersistRoundTripAndDefaults(t *testing.T) {
 		t.Fatal("lastAppliedAt must round-trip")
 	}
 }
+
+// --- Client mutation + dual-stack lookup -----------------------------------
+
+func TestAddClient_DualStackLookupByEitherFamily(t *testing.T) {
+	store := NewStore("")
+	mustReplace(t, store, []atreolink.MemberACLEntry{
+		{MemberID: "m1", Role: "member", IdentityKey: "k"},
+	})
+
+	if ok := store.AddClient("m1", atreolink.ClientRecord{
+		WGPublicKey: "wg1", TunnelIP: "100.64.0.7", TunnelIPv6: "fd00:64::7",
+		Label: "iPhone", Platform: "ios",
+	}); !ok {
+		t.Fatal("AddClient returned false for an existing member")
+	}
+
+	// The v6 address must resolve the same client as the v4 — proves the
+	// byTunnelIP index carries both families of the dual-stack overlay.
+	for _, ip := range []string{"100.64.0.7", "fd00:64::7"} {
+		mid, rec, ok := store.LookupClientByIP(ip)
+		if !ok || mid != "m1" || rec.WGPublicKey != "wg1" {
+			t.Errorf("LookupClientByIP(%q) = (%q, %+v, %v), want m1/wg1", ip, mid, rec, ok)
+		}
+	}
+
+	if _, _, ok := store.LookupClientByIP("100.64.0.99"); ok {
+		t.Error("LookupClientByIP for an unknown IP should miss")
+	}
+
+	// AddClient on a member that doesn't exist, or with an empty key, fails.
+	if store.AddClient("ghost", atreolink.ClientRecord{WGPublicKey: "wg9"}) {
+		t.Error("AddClient to a nonexistent member should return false")
+	}
+	if store.AddClient("m1", atreolink.ClientRecord{WGPublicKey: ""}) {
+		t.Error("AddClient with empty WGPublicKey should return false")
+	}
+}
+
+func TestAddClient_IdempotentPreservesFields(t *testing.T) {
+	store := NewStore("")
+	mustReplace(t, store, []atreolink.MemberACLEntry{
+		{MemberID: "m1", Role: "member", IdentityKey: "k", Clients: []atreolink.ClientRecord{
+			{WGPublicKey: "wg1", TunnelIP: "100.64.0.7", TunnelIPv6: "fd00:64::7", Label: "iPhone", Platform: "ios"},
+		}},
+	})
+
+	// Re-add the same key with everything blank — the merge must keep the
+	// previously-allocated v4/v6/label/platform rather than wiping them.
+	if ok := store.AddClient("m1", atreolink.ClientRecord{WGPublicKey: "wg1"}); !ok {
+		t.Fatal("idempotent AddClient returned false")
+	}
+	mid, rec, ok := store.LookupClientByIP("fd00:64::7")
+	if !ok || mid != "m1" {
+		t.Fatalf("v6 lookup after idempotent re-add: mid=%q ok=%v", mid, ok)
+	}
+	if rec.TunnelIP != "100.64.0.7" || rec.TunnelIPv6 != "fd00:64::7" || rec.Label != "iPhone" || rec.Platform != "ios" {
+		t.Errorf("idempotent re-add wiped fields: %+v", rec)
+	}
+}
+
+func TestAddClient_StripsKeyAndIPFromOtherMembers(t *testing.T) {
+	store := NewStore("")
+	mustReplace(t, store, []atreolink.MemberACLEntry{
+		{MemberID: "m1", Role: "member", IdentityKey: "k1", Clients: []atreolink.ClientRecord{
+			{WGPublicKey: "shared-key", TunnelIP: "100.64.0.7"},
+		}},
+		{MemberID: "m2", Role: "member", IdentityKey: "k2"},
+	})
+
+	// Re-homing the same WG key (and IP) to m2 must remove it from m1 so a
+	// tunnel IP / pubkey is never double-owned.
+	if ok := store.AddClient("m2", atreolink.ClientRecord{WGPublicKey: "shared-key", TunnelIP: "100.64.0.7"}); !ok {
+		t.Fatal("AddClient to m2 returned false")
+	}
+	mid, _, ok := store.LookupClientByIP("100.64.0.7")
+	if !ok || mid != "m2" {
+		t.Errorf("after re-home, 100.64.0.7 owner = %q (ok=%v), want m2", mid, ok)
+	}
+	if m := store.LookupByMemberID("m1"); m == nil || len(m.Clients) != 0 {
+		t.Errorf("m1 should have no clients after key re-home, got %+v", m)
+	}
+}
+
+func TestRemoveClient(t *testing.T) {
+	store := NewStore("")
+	mustReplace(t, store, []atreolink.MemberACLEntry{
+		{MemberID: "m1", Role: "member", IdentityKey: "k", Clients: []atreolink.ClientRecord{
+			{WGPublicKey: "wg1", TunnelIP: "100.64.0.7", TunnelIPv6: "fd00:64::7"},
+		}},
+	})
+
+	if !store.RemoveClient("m1", "wg1") {
+		t.Fatal("RemoveClient of an existing client returned false")
+	}
+	// Both family indexes must drop with the record.
+	if _, _, ok := store.LookupClientByIP("100.64.0.7"); ok {
+		t.Error("v4 index lingered after RemoveClient")
+	}
+	if _, _, ok := store.LookupClientByIP("fd00:64::7"); ok {
+		t.Error("v6 index lingered after RemoveClient")
+	}
+	if store.RemoveClient("m1", "wg1") {
+		t.Error("second RemoveClient should report nothing removed")
+	}
+	if store.RemoveClient("ghost", "wg1") {
+		t.Error("RemoveClient on a nonexistent member should return false")
+	}
+}
+
+func TestSetAllowedApps(t *testing.T) {
+	store := NewStore("")
+	mustReplace(t, store, []atreolink.MemberACLEntry{
+		{MemberID: "m1", Role: "member", IdentityKey: "k"},
+	})
+
+	apps := []atreolink.App{{ID: "app1", Name: "Nextcloud", Slug: "nextcloud", InternalURL: "http://localhost:8080"}}
+	if !store.SetAllowedApps("m1", apps) {
+		t.Fatal("SetAllowedApps returned false for an existing member")
+	}
+	if m := store.LookupByMemberID("m1"); m == nil || len(m.AllowedApps) != 1 || m.AllowedApps[0].ID != "app1" {
+		t.Errorf("AllowedApps not applied: %+v", m)
+	}
+	if store.SetAllowedApps("ghost", apps) {
+		t.Error("SetAllowedApps on a nonexistent member should return false")
+	}
+}
+
+func TestSetMemberStatus(t *testing.T) {
+	store := NewStore("")
+	mustReplace(t, store, []atreolink.MemberACLEntry{
+		{MemberID: "m1", Role: "member", IdentityKey: "k", Clients: []atreolink.ClientRecord{
+			{WGPublicKey: "wg1", TunnelIP: "100.64.0.7"},
+		}},
+	})
+
+	clients, ok := store.SetMemberStatus("m1", "suspended")
+	if !ok {
+		t.Fatal("SetMemberStatus returned ok=false for an existing member")
+	}
+	if len(clients) != 1 || clients[0].WGPublicKey != "wg1" {
+		t.Errorf("SetMemberStatus snapshot = %+v, want the member's one client", clients)
+	}
+	if m := store.LookupByMemberID("m1"); m == nil || m.Status != "suspended" {
+		t.Errorf("status not applied: %+v", m)
+	}
+	if _, ok := store.SetMemberStatus("ghost", "suspended"); ok {
+		t.Error("SetMemberStatus on a nonexistent member should return ok=false")
+	}
+}
+
+func TestStringSummary(t *testing.T) {
+	store := NewStore("")
+	mustReplace(t, store, []atreolink.MemberACLEntry{
+		{MemberID: "m1", Role: "member", IdentityKey: "k", Clients: []atreolink.ClientRecord{
+			{WGPublicKey: "wg1", TunnelIP: "100.64.0.7", TunnelIPv6: "fd00:64::7"},
+		}},
+	})
+	// One client, dual-stack → two tunnelIP index entries.
+	if got := store.String(); got != "ACLStore{members=1, tunnelIPs=2}" {
+		t.Errorf("String() = %q", got)
+	}
+}

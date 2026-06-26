@@ -88,7 +88,7 @@ func TestLoad_FillsDefaultsFromEmptyYAML(t *testing.T) {
 	if !strings.HasPrefix(cfg.AtreoLinkAPIURL, "https://") {
 		t.Errorf("AtreoLinkAPIURL=%q", cfg.AtreoLinkAPIURL)
 	}
-	if cfg.WireGuard.ListenPort == 0 || cfg.WireGuard.TunnelSubnet == "" || cfg.WireGuard.ServerIP == "" {
+	if cfg.WireGuard.ListenPort == 0 {
 		t.Errorf("WireGuard defaults missing: %+v", cfg.WireGuard)
 	}
 	if cfg.Proxy.HTTPPort == 0 || cfg.Proxy.HTTPSPort == 0 || cfg.Proxy.AuthPort == 0 {

@@ -118,6 +118,7 @@ type ProvisionPayload struct {
 type ProvisionResponsePayload struct {
 	ServerPublicKey     string `json:"serverPublicKey"`
 	TunnelIP            string `json:"tunnelIP"`
+	TunnelIPv6          string `json:"tunnelIPv6"`
 	ListenPort          int    `json:"listenPort"`
 	Endpoint            string `json:"endpoint"`
 	AllowedIPs          string `json:"allowedIPs"`
@@ -128,12 +129,10 @@ type ProvisionResponsePayload struct {
 	IPLease *atreolink.TunnelIPLease `json:"ipLease,omitempty"`
 }
 
-// Both sides feed these into the v2 server transcript, so divergence
-// surfaces as a verify failure rather than silent re-routing.
-const (
-	wgQuickAllowedIPs          = "100.64.0.0/24"
-	wgQuickPersistentKeepalive = 25
-)
+// Fed into the v2 server transcript, so divergence surfaces as a verify
+// failure rather than silent re-routing. AllowedIPs (the dual-stack overlay
+// route set) comes from the WireGuard server — see Server.AllowedIPs.
+const wgQuickPersistentKeepalive = 25
 
 type MemberPermissionsPayload struct {
 	CommandEnvelopeFields
@@ -400,6 +399,8 @@ func (h *Handlers) HandleProvision(msg atreolink.TunnelMessage) (*atreolink.Tunn
 	if err != nil {
 		return nil, fmt.Errorf("allocate IP: %w", err)
 	}
+	tunnelIPv6 := h.wgServer.TunnelIPv6(tunnelIP)
+	allowedIPs := h.wgServer.AllowedIPs()
 
 	// AddClient first so a bogus memberID is caught before the kernel
 	// peer install. Order matters for crash safety; rollbacks below
@@ -407,6 +408,7 @@ func (h *Handlers) HandleProvision(msg atreolink.TunnelMessage) (*atreolink.Tunn
 	if !h.aclStore.AddClient(entry.MemberID, atreolink.ClientRecord{
 		WGPublicKey: clientKey,
 		TunnelIP:    tunnelIP,
+		TunnelIPv6:  tunnelIPv6,
 	}) {
 		h.allocator.Release(clientKey)
 		return nil, fmt.Errorf("AddClient failed: unknown member %q", entry.MemberID)
@@ -440,8 +442,9 @@ func (h *Handlers) HandleProvision(msg atreolink.TunnelMessage) (*atreolink.Tunn
 		DeviceID:            h.deviceID,
 		ServerPubKeyB64:     serverPubKey,
 		TunnelIP:            tunnelIP,
+		TunnelIPv6:          tunnelIPv6,
 		Endpoint:            endpoint,
-		AllowedIPs:          wgQuickAllowedIPs,
+		AllowedIPs:          allowedIPs,
 		PersistentKeepalive: wgQuickPersistentKeepalive,
 	})
 	if err != nil {
@@ -457,9 +460,10 @@ func (h *Handlers) HandleProvision(msg atreolink.TunnelMessage) (*atreolink.Tunn
 	respPayload := mustMarshal(ProvisionResponsePayload{
 		ServerPublicKey:     serverPubKey,
 		TunnelIP:            tunnelIP,
+		TunnelIPv6:          tunnelIPv6,
 		ListenPort:          listenPort,
 		Endpoint:            endpoint,
-		AllowedIPs:          wgQuickAllowedIPs,
+		AllowedIPs:          allowedIPs,
 		PersistentKeepalive: wgQuickPersistentKeepalive,
 		NASSignature:        sig,
 		IPLease:             ipLease,

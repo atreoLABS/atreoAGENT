@@ -67,17 +67,26 @@ type NotifyConfig struct {
 
 // FirewallEnabled is *bool so an explicit `false` in YAML survives the
 // default. Disabling exposes every host port to every paired peer.
+// Overlay addressing is fixed, NOT operator-configurable. Every agent uses the
+// same gateway IPs so a single shared DNS record — the CNAME target every
+// custom domain points at — resolves to them universally. Changing them per
+// agent would break that shared record, so the knobs were removed deliberately.
+const (
+	OverlayServerIPv4 = "100.64.0.1"
+	OverlaySubnetV4   = "100.64.0.0/24"
+	OverlayServerIPv6 = "fd00:64::1"
+	OverlaySubnetV6   = "fd00:64::/64"
+)
+
 // IPv6PinholeEnabled is *bool so an explicit `false` in YAML survives the
 // default; it gates opening IPv6 firewall pinholes (PCP / UPnP IGDv2) for the
 // WireGuard port, for operators who prefer a manual router-firewall rule.
 type WireGuardConfig struct {
-	ListenPort         int    `yaml:"listen_port"`
-	TunnelSubnet       string `yaml:"tunnel_subnet"`
-	ServerIP           string `yaml:"server_ip"`
-	FirewallEnabled    *bool  `yaml:"firewall_enabled,omitempty"`     // default: true
-	UPnPEnabled        bool   `yaml:"upnp_enabled"`                   // default: true
-	PCPEnabled         bool   `yaml:"pcp_enabled"`                    // default: true; PCP (RFC 6887), both families
-	IPv6PinholeEnabled *bool  `yaml:"ipv6_pinhole_enabled,omitempty"` // default: true
+	ListenPort         int   `yaml:"listen_port"`
+	FirewallEnabled    *bool `yaml:"firewall_enabled,omitempty"`     // default: true
+	UPnPEnabled        bool  `yaml:"upnp_enabled"`                   // default: true
+	PCPEnabled         bool  `yaml:"pcp_enabled"`                    // default: true; PCP (RFC 6887), both families
+	IPv6PinholeEnabled *bool `yaml:"ipv6_pinhole_enabled,omitempty"` // default: true
 }
 
 // Enabled is *bool so an explicit `false` in YAML survives the default.
@@ -107,8 +116,6 @@ func DefaultConfig() *Config {
 		DataDir:         "/var/lib/atreoagent",
 		WireGuard: WireGuardConfig{
 			ListenPort:         51820,
-			TunnelSubnet:       "100.64.0.0/24",
-			ServerIP:           "100.64.0.1",
 			FirewallEnabled:    &enabled,
 			UPnPEnabled:        true,
 			PCPEnabled:         true,
@@ -174,12 +181,6 @@ func applyDefaults(cfg *Config) {
 	if cfg.WireGuard.ListenPort == 0 {
 		cfg.WireGuard.ListenPort = 51820
 	}
-	if cfg.WireGuard.TunnelSubnet == "" {
-		cfg.WireGuard.TunnelSubnet = "100.64.0.0/24"
-	}
-	if cfg.WireGuard.ServerIP == "" {
-		cfg.WireGuard.ServerIP = "100.64.0.1"
-	}
 	if cfg.WireGuard.FirewallEnabled == nil {
 		t := true
 		cfg.WireGuard.FirewallEnabled = &t
@@ -217,7 +218,7 @@ func applyDefaults(cfg *Config) {
 			"127.0.0.0/8", "::1/128",
 			"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
 			"169.254.0.0/16", "fe80::/10", "fc00::/7",
-			cfg.WireGuard.TunnelSubnet,
+			OverlaySubnetV4,
 		}
 	}
 	if cfg.Proxy.Enabled == nil {

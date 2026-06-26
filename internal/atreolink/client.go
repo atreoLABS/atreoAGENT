@@ -102,10 +102,13 @@ type MemberACLEntry struct {
 	Status           string                 `json:"status"`
 }
 
-// atreoLINK may emit an empty TunnelIP — the agent owns allocation.
+// atreoLINK may emit an empty TunnelIP — the agent owns allocation. TunnelIPv6
+// is the agent-derived IPv6 overlay counterpart (1:1 host mapping off TunnelIP);
+// persisted so the byTunnelIP index is correct immediately on a restart's load.
 type ClientRecord struct {
 	WGPublicKey  string `json:"wgPublicKey"`
 	TunnelIP     string `json:"tunnelIp,omitempty"`
+	TunnelIPv6   string `json:"tunnelIp6,omitempty"`
 	Label        string `json:"label,omitempty"`
 	Platform     string `json:"platform,omitempty"`
 	EndpointType string `json:"endpointType,omitempty"`

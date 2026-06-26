@@ -239,4 +239,3 @@ func TestHandleNotifyAPIKeyRotate_RejectsStaleTimestamp(t *testing.T) {
 		t.Errorf("err = %v, want ErrStaleTimestamp", err)
 	}
 }
-

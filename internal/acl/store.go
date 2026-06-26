@@ -459,6 +459,9 @@ func (s *Store) AddClient(memberID string, rec atreolink.ClientRecord) bool {
 				if rec.TunnelIP == "" {
 					rec.TunnelIP = c.TunnelIP
 				}
+				if rec.TunnelIPv6 == "" {
+					rec.TunnelIPv6 = c.TunnelIPv6
+				}
 				if rec.Label == "" {
 					rec.Label = c.Label
 				}
@@ -513,7 +516,7 @@ func (s *Store) LookupClientByIP(ip string) (memberID string, rec atreolink.Clie
 	defer s.mu.RUnlock()
 	if entry, found := s.byTunnelIP[ip]; found {
 		for _, c := range entry.Clients {
-			if c.TunnelIP == ip {
+			if c.TunnelIP == ip || c.TunnelIPv6 == ip {
 				return entry.MemberID, c, true
 			}
 		}
@@ -726,10 +729,13 @@ func (s *Store) findAppBySlug(slug string) *atreolink.App {
 }
 
 // PortGrant authorises a peer (by tunnel source IP) to reach raw host ports.
+// TunnelIPv6 is the peer's v6 overlay address (empty on a v4-only overlay) so
+// the firewall can confine the same peer reaching the proxy over either family.
 type PortGrant struct {
-	TunnelIP string
-	TCP      []int
-	UDP      []int
+	TunnelIP   string
+	TunnelIPv6 string
+	TCP        []int
+	UDP        []int
 }
 
 // PortGrants derives the per-peer raw-port grants: one per active member's
@@ -763,7 +769,7 @@ func (s *Store) PortGrants() []PortGrant {
 			if c.TunnelIP == "" {
 				continue
 			}
-			grants = append(grants, PortGrant{TunnelIP: c.TunnelIP, TCP: tcp, UDP: udp})
+			grants = append(grants, PortGrant{TunnelIP: c.TunnelIP, TunnelIPv6: c.TunnelIPv6, TCP: tcp, UDP: udp})
 		}
 	}
 	return grants
@@ -779,6 +785,9 @@ func (s *Store) rebuildIndexes() {
 		for _, c := range m.Clients {
 			if c.TunnelIP != "" {
 				s.byTunnelIP[c.TunnelIP] = m
+			}
+			if c.TunnelIPv6 != "" {
+				s.byTunnelIP[c.TunnelIPv6] = m
 			}
 		}
 		if email := strings.ToLower(strings.TrimSpace(m.Email)); email != "" {

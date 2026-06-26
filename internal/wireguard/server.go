@@ -48,9 +48,50 @@ func validateTunnelIPv4(s string) error {
 	return nil
 }
 
+func validateTunnelIPv6(s string) error {
+	ip := net.ParseIP(s)
+	if ip == nil {
+		return fmt.Errorf("not a parseable IP literal: %q", s)
+	}
+	if ip.To4() != nil {
+		return fmt.Errorf("not an IPv6 address: %q", s)
+	}
+	return nil
+}
+
+// deriveTunnelIPv6 maps an allocated IPv4 overlay host to its IPv6 overlay
+// counterpart by reusing the v4 host octet: 100.64.0.7 -> <serverIPv6>::7. The
+// dual-stack overlay keeps a 1:1 host mapping so the single IPv4 allocator
+// stays the source of truth and no separate v6 allocation state is persisted.
+func deriveTunnelIPv6(serverIPv6, tunnelIPv4 string) (string, error) {
+	v4 := net.ParseIP(tunnelIPv4)
+	if v4 == nil || v4.To4() == nil {
+		return "", fmt.Errorf("derive v6: %q is not an IPv4 literal", tunnelIPv4)
+	}
+	base := net.ParseIP(serverIPv6)
+	if base == nil || base.To4() != nil {
+		return "", fmt.Errorf("derive v6: server v6 %q is not an IPv6 literal", serverIPv6)
+	}
+	out := make(net.IP, net.IPv6len)
+	copy(out, base.To16())
+	out[15] = v4.To4()[3] // reuse the v4 host octet as the v6 interface id
+	return out.String(), nil
+}
+
+// v6PrefixLen reads the prefix length from a ULA subnet like "fd00:64::/64".
+func v6PrefixLen(subnetV6 string) int {
+	if _, ipnet, err := net.ParseCIDR(subnetV6); err == nil {
+		if ones, _ := ipnet.Mask.Size(); ones > 0 {
+			return ones
+		}
+	}
+	return 64
+}
+
 type Peer struct {
-	PublicKey string
-	TunnelIP  string
+	PublicKey  string
+	TunnelIP   string
+	TunnelIPv6 string
 }
 
 // Drives a real WireGuard interface via the `wg` and `ip` CLIs.
@@ -58,6 +99,8 @@ type Server struct {
 	listenPort int
 	serverIP   string
 	subnet     string
+	serverIPv6 string
+	subnetV6   string
 	iface      string
 	privateKey []byte
 	publicKey  []byte
@@ -68,11 +111,13 @@ type Server struct {
 	running    bool
 }
 
-func NewServer(listenPort int, serverIP, subnet, keysDir string, allocator *IPAllocator) (*Server, error) {
+func NewServer(listenPort int, serverIP, subnet, serverIPv6, subnetV6, keysDir string, allocator *IPAllocator) (*Server, error) {
 	s := &Server{
 		listenPort: listenPort,
 		serverIP:   serverIP,
 		subnet:     subnet,
+		serverIPv6: serverIPv6,
+		subnetV6:   subnetV6,
 		iface:      "wg-atreo",
 		keysDir:    keysDir,
 		allocator:  allocator,
@@ -174,6 +219,16 @@ func (s *Server) Start(ctx context.Context) error {
 		return fmt.Errorf("assign IP: %w", err)
 	}
 
+	// Dual-stack overlay: app hostnames also carry an AAAA to this ULA so
+	// IPv6-only / DNS64 clients aren't NAT64-synthesised off the IPv4 route.
+	// Non-fatal — a host with IPv6 disabled keeps running the v4 overlay.
+	if s.serverIPv6 != "" {
+		v6addr := fmt.Sprintf("%s/%d", s.serverIPv6, v6PrefixLen(s.subnetV6))
+		if err := run(ctx, "ip", "addr", "add", v6addr, "dev", s.iface); err != nil {
+			logging.Warn("WireGuard: assign IPv6 %s failed — v6 overlay disabled on this host: %v", v6addr, err)
+		}
+	}
+
 	if err := run(ctx, "ip", "link", "set", s.iface, "up"); err != nil {
 		_ = exec.CommandContext(ctx, "ip", "link", "del", s.iface).Run()
 		return fmt.Errorf("bring up interface: %w", err)
@@ -198,8 +253,38 @@ func (s *Server) Stop() error {
 	return nil
 }
 
+// TunnelIPv6 derives a peer's IPv6 overlay address from its allocated v4, or
+// "" when the v6 overlay is unconfigured or derivation fails — callers then
+// degrade to a v4-only peer. Deterministic, so every call site (peer install,
+// ACL index, firewall grant) agrees without sharing state.
+func (s *Server) TunnelIPv6(tunnelIPv4 string) string {
+	if s.serverIPv6 == "" {
+		return ""
+	}
+	v6, err := deriveTunnelIPv6(s.serverIPv6, tunnelIPv4)
+	if err != nil {
+		logging.Error("WireGuard: derive v6 for %s failed: %v", tunnelIPv4, err)
+		return ""
+	}
+	if err := validateTunnelIPv6(v6); err != nil {
+		logging.Error("WireGuard: derived v6 %s invalid: %v", v6, err)
+		return ""
+	}
+	return v6
+}
+
+// AllowedIPs is the client-side route set for the dual-stack overlay — the v4
+// /24 plus the v6 /64 when configured. Signed into the provision transcript.
+func (s *Server) AllowedIPs() string {
+	if s.subnetV6 != "" {
+		return s.subnet + "," + s.subnetV6
+	}
+	return s.subnet
+}
+
 // pubKey and tunnelIP arrive untrusted; both are validated to defeat
-// flag-injection into the subprocess.
+// flag-injection into the subprocess. The peer's v6 overlay address is derived
+// from its v4 (1:1 host mapping) and added alongside when the overlay is dual-stack.
 func (s *Server) AddPeer(pubKey, tunnelIP string) error {
 	if err := validateWGPublicKey(pubKey); err != nil {
 		return fmt.Errorf("wg pubkey: %w", err)
@@ -211,7 +296,11 @@ func (s *Server) AddPeer(pubKey, tunnelIP string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	tunnelIPv6 := s.TunnelIPv6(tunnelIP)
 	allowedIPs := tunnelIP + "/32"
+	if tunnelIPv6 != "" {
+		allowedIPs += "," + tunnelIPv6 + "/128"
+	}
 	if err := run(context.Background(), "wg", "set", s.iface,
 		"peer", pubKey,
 		"allowed-ips", allowedIPs,
@@ -220,11 +309,16 @@ func (s *Server) AddPeer(pubKey, tunnelIP string) error {
 	}
 
 	// `route replace` is idempotent — no-op if an identical route already exists.
-	if err := run(context.Background(), "ip", "route", "replace", allowedIPs, "dev", s.iface); err != nil {
-		logging.Error("WireGuard: route replace for %s failed: %v", allowedIPs, err)
+	if err := run(context.Background(), "ip", "route", "replace", tunnelIP+"/32", "dev", s.iface); err != nil {
+		logging.Error("WireGuard: route replace for %s failed: %v", tunnelIP, err)
+	}
+	if tunnelIPv6 != "" {
+		if err := run(context.Background(), "ip", "-6", "route", "replace", tunnelIPv6+"/128", "dev", s.iface); err != nil {
+			logging.Error("WireGuard: v6 route replace for %s failed: %v", tunnelIPv6, err)
+		}
 	}
 
-	s.peers[pubKey] = Peer{PublicKey: pubKey, TunnelIP: tunnelIP}
+	s.peers[pubKey] = Peer{PublicKey: pubKey, TunnelIP: tunnelIP, TunnelIPv6: tunnelIPv6}
 	logging.Info("WireGuard: added peer %s with IP %s (%d total)", truncateKey(pubKey), tunnelIP, len(s.peers))
 	return nil
 }
@@ -243,6 +337,11 @@ func (s *Server) RemovePeer(pubKey string) error {
 	}
 	if err := run(context.Background(), "ip", "route", "del", peer.TunnelIP+"/32", "dev", s.iface); err != nil {
 		logging.Error("WireGuard: route del %s failed (may already be gone): %v", peer.TunnelIP, err)
+	}
+	if peer.TunnelIPv6 != "" {
+		if err := run(context.Background(), "ip", "-6", "route", "del", peer.TunnelIPv6+"/128", "dev", s.iface); err != nil {
+			logging.Error("WireGuard: v6 route del %s failed (may already be gone): %v", peer.TunnelIPv6, err)
+		}
 	}
 
 	delete(s.peers, pubKey)

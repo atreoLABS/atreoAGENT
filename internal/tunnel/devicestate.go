@@ -384,6 +384,16 @@ func (h *Handlers) HandleDeviceState(msg atreolink.TunnelMessage) (*atreolink.Tu
 		}
 	}
 
+	// Derive the v6 overlay host from each v4 so the ACL index + firewall
+	// grants cover both families (peers' kernel routes are added by AddPeer).
+	for mi := range vMembers {
+		for ci := range vMembers[mi].Clients {
+			if c := &vMembers[mi].Clients[ci]; c.TunnelIP != "" {
+				c.TunnelIPv6 = h.wgServer.TunnelIPv6(c.TunnelIP)
+			}
+		}
+	}
+
 	// Wholesale replace. removedClientKeys covers every client that
 	// disappeared — whole-member removals, clients dropped from a
 	// surviving member, and clients excluded because their registration

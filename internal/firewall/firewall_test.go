@@ -9,13 +9,13 @@ import (
 
 func TestPortGrantRules(t *testing.T) {
 	grants := []PortGrant{
-		{SourceIP: "100.64.0.2", TCP: []int{25565}},
-		{SourceIP: "100.64.0.3", UDP: []int{19132}},
-		{SourceIP: "100.64.0.4", TCP: []int{22, 5432}, UDP: []int{51820}},
-		{SourceIP: "", TCP: []int{80}},              // no source: skipped
-		{SourceIP: "100.64.0.5", TCP: []int{0, -1}}, // bad ports: skipped
+		{SourceIP: "100.64.0.2", SourceIPv6: "fd00:64::2", TCP: []int{25565}},
+		{SourceIP: "100.64.0.3", SourceIPv6: "fd00:64::3", UDP: []int{19132}},
+		{SourceIP: "100.64.0.4", TCP: []int{22, 5432}, UDP: []int{51820}}, // v4-only: skipped in v6 table
+		{SourceIP: "", TCP: []int{80}},                                    // no source: skipped
+		{SourceIP: "100.64.0.5", TCP: []int{0, -1}},                       // bad ports: skipped
 	}
-	got := portGrantRules(inputChain, grants)
+	got := portGrantRules(inputChain, grants, false)
 	want := [][]string{
 		{"-A", inputChain, "-s", "100.64.0.2", "-p", "tcp", "--dport", "25565", "-j", "ACCEPT"},
 		{"-A", inputChain, "-s", "100.64.0.3", "-p", "udp", "--dport", "19132", "-j", "ACCEPT"},
@@ -28,10 +28,25 @@ func TestPortGrantRules(t *testing.T) {
 	}
 }
 
+func TestPortGrantRules_IPv6(t *testing.T) {
+	// The v6 table emits SourceIPv6; v4-only grants (no SourceIPv6) are skipped.
+	grants := []PortGrant{
+		{SourceIP: "100.64.0.2", SourceIPv6: "fd00:64::2", TCP: []int{25565}},
+		{SourceIP: "100.64.0.4", TCP: []int{22}}, // v4-only: skipped in v6 table
+	}
+	got := portGrantRules(inputChain, grants, true)
+	want := [][]string{
+		{"-A", inputChain, "-s", "fd00:64::2", "-p", "tcp", "--dport", "25565", "-j", "ACCEPT"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("v6 portGrantRules mismatch:\n got=%v\nwant=%v", got, want)
+	}
+}
+
 func TestPortGrantRules_ForwardChain(t *testing.T) {
 	// Docker-published ports traverse FORWARD; the same grants must emit there.
 	grants := []PortGrant{{SourceIP: "100.64.0.2", TCP: []int{9443}}}
-	got := portGrantRules(forwardChain, grants)
+	got := portGrantRules(forwardChain, grants, false)
 	want := [][]string{
 		{"-A", forwardChain, "-s", "100.64.0.2", "-p", "tcp", "--dport", "9443", "-j", "ACCEPT"},
 	}
@@ -41,7 +56,7 @@ func TestPortGrantRules_ForwardChain(t *testing.T) {
 }
 
 func TestPortGrantRules_Empty(t *testing.T) {
-	if rules := portGrantRules(inputChain, nil); len(rules) != 0 {
+	if rules := portGrantRules(inputChain, nil, false); len(rules) != 0 {
 		t.Errorf("expected no rules for nil grants, got %v", rules)
 	}
 }

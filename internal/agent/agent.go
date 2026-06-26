@@ -64,8 +64,8 @@ func New(cfg *config.Config) (*Agent, error) {
 	}
 
 	allocator, err := wireguard.NewIPAllocator(
-		cfg.WireGuard.TunnelSubnet,
-		cfg.WireGuard.ServerIP,
+		config.OverlaySubnetV4,
+		config.OverlayServerIPv4,
 		cfg.IPAllocPath(),
 	)
 	if err != nil {
@@ -74,8 +74,10 @@ func New(cfg *config.Config) (*Agent, error) {
 
 	wgServer, err := wireguard.NewServer(
 		cfg.WireGuard.ListenPort,
-		cfg.WireGuard.ServerIP,
-		cfg.WireGuard.TunnelSubnet,
+		config.OverlayServerIPv4,
+		config.OverlaySubnetV4,
+		config.OverlayServerIPv6,
+		config.OverlaySubnetV6,
 		cfg.KeysDir(),
 		allocator,
 	)
@@ -333,11 +335,11 @@ func (a *Agent) Run(ctx context.Context) error {
 		}()
 	} else {
 		logging.Info("Built-in proxy disabled. Use your own reverse proxy to serve apps on the WireGuard interface.")
-		logging.Info("Forward-auth endpoint available at %s:%d/auth", a.cfg.WireGuard.ServerIP, a.cfg.Proxy.AuthPort)
+		logging.Info("Forward-auth endpoint available at %s:%d/auth", config.OverlayServerIPv4, a.cfg.Proxy.AuthPort)
 	}
 
 	// Forward-auth always runs — external reverse proxies depend on it.
-	authListen := fmt.Sprintf("%s:%d", a.cfg.WireGuard.ServerIP, a.cfg.Proxy.AuthPort)
+	authListen := fmt.Sprintf("%s:%d", config.OverlayServerIPv4, a.cfg.Proxy.AuthPort)
 	authServer := proxy.NewAuthServer(a.aclStore, authListen, a.certs.Registry, a.cfg.Proxy.TrustedNetworks, a.cfg.Proxy.TrustedProxies)
 	go func() {
 		if err := authServer.Start(ctx); err != nil {
@@ -1059,6 +1061,7 @@ func (a *Agent) reconcilePeers() {
 			a.aclStore.AddClient(member.MemberID, atreolink.ClientRecord{
 				WGPublicKey: c.WGPublicKey,
 				TunnelIP:    tunnelIP,
+				TunnelIPv6:  a.wgServer.TunnelIPv6(tunnelIP),
 				Label:       c.Label,
 				Platform:    c.Platform,
 			})
@@ -1096,7 +1099,7 @@ func (a *Agent) reconcileFirewallGrants(ctx context.Context) {
 	src := a.aclStore.PortGrants()
 	grants := make([]firewall.PortGrant, 0, len(src))
 	for _, g := range src {
-		grants = append(grants, firewall.PortGrant{SourceIP: g.TunnelIP, TCP: g.TCP, UDP: g.UDP})
+		grants = append(grants, firewall.PortGrant{SourceIP: g.TunnelIP, SourceIPv6: g.TunnelIPv6, TCP: g.TCP, UDP: g.UDP})
 	}
 	logging.Debug("firewall: %d raw-port peer-grant(s) from ACL", len(grants))
 	if err := a.firewall.SetPortGrants(ctx, grants); err != nil {

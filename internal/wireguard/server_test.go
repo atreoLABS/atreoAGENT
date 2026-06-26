@@ -15,11 +15,53 @@ func newTestServer(t *testing.T) (*Server, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv, err := NewServer(51820, "100.64.0.1", "100.64.0.0/24", keysDir, allocator)
+	srv, err := NewServer(51820, "100.64.0.1", "100.64.0.0/24", "fd00:64::1", "fd00:64::/64", keysDir, allocator)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return srv, keysDir
+}
+
+func TestDeriveTunnelIPv6(t *testing.T) {
+	cases := []struct {
+		v4, want string
+	}{
+		{"100.64.0.1", "fd00:64::1"},   // server
+		{"100.64.0.2", "fd00:64::2"},   // first client
+		{"100.64.0.42", "fd00:64::2a"}, // host octet 42 == 0x2a
+		{"100.64.0.254", "fd00:64::fe"},
+	}
+	for _, c := range cases {
+		got, err := deriveTunnelIPv6("fd00:64::1", c.v4)
+		if err != nil {
+			t.Fatalf("deriveTunnelIPv6(%q): %v", c.v4, err)
+		}
+		if got != c.want {
+			t.Errorf("deriveTunnelIPv6(%q) = %q, want %q", c.v4, got, c.want)
+		}
+	}
+	if _, err := deriveTunnelIPv6("fd00:64::1", "not-an-ip"); err == nil {
+		t.Error("expected error for non-IPv4 input")
+	}
+	if _, err := deriveTunnelIPv6("100.64.0.1", "100.64.0.2"); err == nil {
+		t.Error("expected error when serverIPv6 is not IPv6")
+	}
+}
+
+func TestServerTunnelIPv6_EmptyWhenUnconfigured(t *testing.T) {
+	dir := t.TempDir()
+	allocator, _ := NewIPAllocator("100.64.0.0/24", "100.64.0.1", filepath.Join(dir, "alloc.json"))
+	// serverIPv6 == "" → v4-only overlay, derivation returns "".
+	srv, err := NewServer(51820, "100.64.0.1", "100.64.0.0/24", "", "", filepath.Join(dir, "keys"), allocator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := srv.TunnelIPv6("100.64.0.7"); got != "" {
+		t.Errorf("TunnelIPv6 on v4-only overlay = %q, want empty", got)
+	}
+	if got := srv.AllowedIPs(); got != "100.64.0.0/24" {
+		t.Errorf("AllowedIPs v4-only = %q, want 100.64.0.0/24", got)
+	}
 }
 
 func TestNewServer_GeneratesKeysIfMissing(t *testing.T) {
@@ -42,7 +84,7 @@ func TestNewServer_LoadsExistingKeys(t *testing.T) {
 	pub1 := srv1.PublicKey()
 
 	allocator, _ := NewIPAllocator("100.64.0.0/24", "100.64.0.1", filepath.Join(t.TempDir(), "alloc.json"))
-	srv2, err := NewServer(51820, "100.64.0.1", "100.64.0.0/24", keysDir, allocator)
+	srv2, err := NewServer(51820, "100.64.0.1", "100.64.0.0/24", "fd00:64::1", "fd00:64::/64", keysDir, allocator)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +103,7 @@ func TestNewServer_BadKeyFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	allocator, _ := NewIPAllocator("100.64.0.0/24", "100.64.0.1", filepath.Join(dir, "alloc.json"))
-	if _, err := NewServer(51820, "100.64.0.1", "100.64.0.0/24", keysDir, allocator); err == nil {
+	if _, err := NewServer(51820, "100.64.0.1", "100.64.0.0/24", "fd00:64::1", "fd00:64::/64", keysDir, allocator); err == nil {
 		t.Error("expected error on corrupt private key file")
 	}
 }

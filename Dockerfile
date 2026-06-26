@@ -14,7 +14,7 @@ RUN git config --global --add safe.directory /src && \
 
 FROM alpine:3.24
 RUN apk --no-cache upgrade && \
-    apk add --no-cache ca-certificates iproute2 wireguard-tools iptables
+    apk add --no-cache ca-certificates iproute2 wireguard-tools iptables ip6tables
 COPY --from=build /atreoagent /usr/local/bin/
 VOLUME /var/lib/atreoagent
 ENTRYPOINT ["atreoagent"]

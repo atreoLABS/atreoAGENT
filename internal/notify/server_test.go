@@ -64,7 +64,6 @@ func newPushFixture(t *testing.T) *pushFixture {
 	return f
 }
 
-
 // newACLWithMember stages an ACL store seeded with one member who has a
 // real Ed25519 identity pubkey. Returns the store + the seeded member's
 // userId / email so tests can target them.
@@ -104,7 +103,7 @@ func TestNewServer(t *testing.T) {
 	dir := t.TempDir()
 	link := atreolink.NewClient("http://example.invalid", notifyTestKM(t), "")
 	store := acl.NewStore(filepath.Join(dir, "acl.json"))
-	
+
 	srv, err := NewServer(8080, dir, "agent-uuid", link, store)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
@@ -121,7 +120,7 @@ func TestRotateAPIKey(t *testing.T) {
 	dir := t.TempDir()
 	link := atreolink.NewClient("http://example.invalid", notifyTestKM(t), "")
 	store := acl.NewStore(filepath.Join(dir, "acl.json"))
-	
+
 	srv, err := NewServer(8080, dir, "agent-uuid", link, store)
 	if err != nil {
 		t.Fatal(err)
@@ -151,7 +150,7 @@ func TestHandleNotify_Unauthorized(t *testing.T) {
 	dir := t.TempDir()
 	link := atreolink.NewClient("http://example.invalid", notifyTestKM(t), "")
 	store := acl.NewStore(filepath.Join(dir, "acl.json"))
-	
+
 	srv, _ := NewServer(8080, dir, "agent-uuid", link, store)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/notify", strings.NewReader(`{}`))
@@ -169,7 +168,7 @@ func TestAuthMiddleware(t *testing.T) {
 	dir := t.TempDir()
 	link := atreolink.NewClient("http://example.invalid", notifyTestKM(t), "")
 	store := acl.NewStore(filepath.Join(dir, "acl.json"))
-	
+
 	srv, _ := NewServer(8080, dir, "agent-uuid", link, store)
 
 	valid := srv.APIKey()
@@ -214,7 +213,7 @@ func TestHandleNotify_BadRequest(t *testing.T) {
 	dir := t.TempDir()
 	link := atreolink.NewClient("http://example.invalid", notifyTestKM(t), "")
 	store := acl.NewStore(filepath.Join(dir, "acl.json"))
-	
+
 	srv, _ := NewServer(8080, dir, "agent-uuid", link, store)
 
 	cases := map[string]string{
@@ -238,7 +237,7 @@ func TestHandleNotify_UnknownEmail(t *testing.T) {
 	dir := t.TempDir()
 	link := atreolink.NewClient("http://example.invalid", notifyTestKM(t), "")
 	store := acl.NewStore(filepath.Join(dir, "acl.json"))
-	
+
 	srv, _ := NewServer(8080, dir, "agent-uuid", link, store)
 
 	req := authedRequest(t, srv, http.MethodPost, "/v1/notify",
@@ -257,7 +256,7 @@ func TestHandleNotify_Success(t *testing.T) {
 	store, userID, email := newACLWithMember(t, "admin")
 	fixture := newPushFixture(t)
 	link := atreolink.NewClient(fixture.server.URL, notifyTestKM(t), "11111111-1111-1111-1111-111111111111")
-	
+
 	srv, _ := NewServer(8080, t.TempDir(), "agent-uuid", link, store)
 	_ = userID
 
@@ -293,7 +292,7 @@ func TestSendToMember_PreviewBodyTruncated(t *testing.T) {
 	store, _, email := newACLWithMember(t, "admin")
 	fixture := newPushFixture(t)
 	link := atreolink.NewClient(fixture.server.URL, notifyTestKM(t), "11111111-1111-1111-1111-111111111111")
-	
+
 	srv, _ := NewServer(8080, t.TempDir(), "agent-uuid", link, store)
 
 	longBody := strings.Repeat("a", PreviewBodyChars+50)
@@ -321,7 +320,7 @@ func TestSendToMember_PreviewBodyTruncated(t *testing.T) {
 func TestSendToMember_NoIdentityPubkey(t *testing.T) {
 	store := acl.NewStore(filepath.Join(t.TempDir(), "acl.json"))
 	link := atreolink.NewClient("http://example.invalid", notifyTestKM(t), "")
-	
+
 	srv, _ := NewServer(8080, t.TempDir(), "agent-uuid", link, store)
 
 	bare := &atreolink.MemberACLEntry{UserID: "u", IdentityKey: ""}

@@ -89,7 +89,7 @@ func setupHandlers(t *testing.T) (*Handlers, ed25519.PrivateKey, string, string)
 		t.Fatalf("NewIPAllocator: %v", err)
 	}
 
-	wgServer, err := wireguard.NewServer(51820, "100.64.0.1", "100.64.0.0/24", wgKeysDir, allocator)
+	wgServer, err := wireguard.NewServer(51820, "100.64.0.1", "100.64.0.0/24", "fd00:64::1", "fd00:64::/64", wgKeysDir, allocator)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}

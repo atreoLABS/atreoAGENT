@@ -20,16 +20,33 @@ const (
 	forwardChain = "ATREOAGENT-WG-FORWARD"
 )
 
+// The overlay is dual-stack (100.64.0.0/24 + fd00:64::/64) on one wg interface,
+// so v6 peer traffic must be confined identically — otherwise network_mode:host
+// exposes every ::-bound host service to peers. Each table is driven through the
+// same ruleset; only the binary and the ICMP proto name differ.
+type fwTable struct {
+	bin       string
+	icmpProto string
+}
+
+var tables = []fwTable{
+	{bin: "iptables", icmpProto: "icmp"},
+	{bin: "ip6tables", icmpProto: "ipv6-icmp"},
+}
+
 type Config struct {
 	Iface           string // WG interface name (e.g. "wg-atreo")
 	AllowedTCPPorts []int  // ports peers may reach (the proxy HTTP/HTTPS)
 }
 
-// PortGrant lets one peer (by tunnel source IP) reach a set of raw host ports.
+// PortGrant lets one peer reach a set of raw host ports. SourceIP / SourceIPv6
+// are the peer's v4 / v6 overlay addresses; each is emitted only into its own
+// table (a v4 literal in ip6tables, or vice versa, is rejected by the binary).
 type PortGrant struct {
-	SourceIP string
-	TCP      []int
-	UDP      []int
+	SourceIP   string
+	SourceIPv6 string
+	TCP        []int
+	UDP        []int
 }
 
 type Manager struct {
@@ -45,14 +62,16 @@ func NewManager(c Config) *Manager {
 }
 
 // Stale state from a previous crash is cleaned up first.
-// Fails closed: a missing iptables binary is an error so the caller can
-// refuse to bring up the tunnel rather than admit peers unconfined.
+// Fails closed: a missing iptables/ip6tables binary is an error so the caller
+// can refuse to bring up the tunnel rather than admit peers unconfined.
 func (m *Manager) Apply(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if _, err := exec.LookPath("iptables"); err != nil {
-		return fmt.Errorf("firewall: iptables not on PATH: %w", err)
+	for _, t := range tables {
+		if _, err := exec.LookPath(t.bin); err != nil {
+			return fmt.Errorf("firewall: %s not on PATH: %w", t.bin, err)
+		}
 	}
 	if m.cfg.Iface == "" {
 		return fmt.Errorf("firewall: empty iface")
@@ -60,76 +79,78 @@ func (m *Manager) Apply(ctx context.Context) error {
 
 	m.teardown(ctx)
 
-	if err := run(ctx, "iptables", "-N", inputChain); err != nil {
-		return fmt.Errorf("create %s: %w", inputChain, err)
+	for _, t := range tables {
+		if err := m.applyTable(ctx, t); err != nil {
+			m.teardown(ctx)
+			return err
+		}
 	}
-	if err := run(ctx, "iptables", "-N", forwardChain); err != nil {
-		_ = run(ctx, "iptables", "-X", inputChain)
-		return fmt.Errorf("create %s: %w", forwardChain, err)
+
+	m.enabled = true
+	logging.Info("firewall: tunnel access on %s restricted to TCP %v + ICMP (IPv4+IPv6)", m.cfg.Iface, m.cfg.AllowedTCPPorts)
+	return nil
+}
+
+// applyTable installs the confinement ruleset into one address family's table.
+func (m *Manager) applyTable(ctx context.Context, t fwTable) error {
+	if err := run(ctx, t.bin, "-N", inputChain); err != nil {
+		return fmt.Errorf("%s create %s: %w", t.bin, inputChain, err)
+	}
+	if err := run(ctx, t.bin, "-N", forwardChain); err != nil {
+		return fmt.Errorf("%s create %s: %w", t.bin, forwardChain, err)
 	}
 
 	// established/related (return traffic) + ICMP (diagnostics).
-	if err := run(ctx, "iptables", "-A", inputChain,
+	if err := run(ctx, t.bin, "-A", inputChain,
 		"-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"); err != nil {
-		m.teardown(ctx)
-		return fmt.Errorf("conntrack rule: %w", err)
+		return fmt.Errorf("%s conntrack rule: %w", t.bin, err)
 	}
-	if err := run(ctx, "iptables", "-A", inputChain, "-p", "icmp", "-j", "ACCEPT"); err != nil {
-		m.teardown(ctx)
-		return fmt.Errorf("icmp rule: %w", err)
+	if err := run(ctx, t.bin, "-A", inputChain, "-p", t.icmpProto, "-j", "ACCEPT"); err != nil {
+		return fmt.Errorf("%s icmp rule: %w", t.bin, err)
 	}
 
 	for _, port := range m.cfg.AllowedTCPPorts {
 		if port <= 0 {
 			continue
 		}
-		if err := run(ctx, "iptables", "-A", inputChain,
+		if err := run(ctx, t.bin, "-A", inputChain,
 			"-p", "tcp", "--dport", strconv.Itoa(port), "-j", "ACCEPT"); err != nil {
-			m.teardown(ctx)
-			return fmt.Errorf("allow tcp/%d: %w", port, err)
+			return fmt.Errorf("%s allow tcp/%d: %w", t.bin, port, err)
 		}
 	}
 
 	// Host-native services: source-scoped ACCEPTs above the terminal DROP.
-	for _, args := range portGrantRules(inputChain, m.portGrants) {
-		if err := run(ctx, "iptables", args...); err != nil {
-			m.teardown(ctx)
-			return fmt.Errorf("port grant input rule %v: %w", args, err)
+	v6 := t.bin == "ip6tables"
+	for _, args := range portGrantRules(inputChain, m.portGrants, v6) {
+		if err := run(ctx, t.bin, args...); err != nil {
+			return fmt.Errorf("%s port grant input rule %v: %w", t.bin, args, err)
 		}
 	}
 
-	if err := run(ctx, "iptables", "-A", inputChain, "-j", "DROP"); err != nil {
-		m.teardown(ctx)
-		return fmt.Errorf("input drop: %w", err)
+	if err := run(ctx, t.bin, "-A", inputChain, "-j", "DROP"); err != nil {
+		return fmt.Errorf("%s input drop: %w", t.bin, err)
 	}
 
 	// Docker publishes container ports via DNAT, so they traverse FORWARD, not
 	// INPUT. Return traffic rides Docker's own forward rules.
-	for _, args := range portGrantRules(forwardChain, m.portGrants) {
-		if err := run(ctx, "iptables", args...); err != nil {
-			m.teardown(ctx)
-			return fmt.Errorf("port grant forward rule %v: %w", args, err)
+	for _, args := range portGrantRules(forwardChain, m.portGrants, v6) {
+		if err := run(ctx, t.bin, args...); err != nil {
+			return fmt.Errorf("%s port grant forward rule %v: %w", t.bin, args, err)
 		}
 	}
 
-	if err := run(ctx, "iptables", "-A", forwardChain, "-j", "DROP"); err != nil {
-		m.teardown(ctx)
-		return fmt.Errorf("forward drop: %w", err)
+	if err := run(ctx, t.bin, "-A", forwardChain, "-j", "DROP"); err != nil {
+		return fmt.Errorf("%s forward drop: %w", t.bin, err)
 	}
 
 	// Top of chain wins over permissive default-accept rules.
-	if err := run(ctx, "iptables", "-I", "INPUT", "1", "-i", m.cfg.Iface, "-j", inputChain); err != nil {
-		m.teardown(ctx)
-		return fmt.Errorf("install INPUT jump: %w", err)
+	if err := run(ctx, t.bin, "-I", "INPUT", "1", "-i", m.cfg.Iface, "-j", inputChain); err != nil {
+		return fmt.Errorf("%s install INPUT jump: %w", t.bin, err)
 	}
-	if err := run(ctx, "iptables", "-I", "FORWARD", "1", "-i", m.cfg.Iface, "-j", forwardChain); err != nil {
-		_ = run(ctx, "iptables", "-D", "INPUT", "-i", m.cfg.Iface, "-j", inputChain)
-		m.teardown(ctx)
-		return fmt.Errorf("install FORWARD jump: %w", err)
+	if err := run(ctx, t.bin, "-I", "FORWARD", "1", "-i", m.cfg.Iface, "-j", forwardChain); err != nil {
+		_ = run(ctx, t.bin, "-D", "INPUT", "-i", m.cfg.Iface, "-j", inputChain)
+		return fmt.Errorf("%s install FORWARD jump: %w", t.bin, err)
 	}
-
-	m.enabled = true
-	logging.Info("firewall: tunnel access on %s restricted to TCP %v + ICMP", m.cfg.Iface, m.cfg.AllowedTCPPorts)
 	return nil
 }
 
@@ -151,12 +172,17 @@ func (m *Manager) SetPortGrants(ctx context.Context, grants []PortGrant) error {
 	return m.Apply(ctx)
 }
 
-// portGrantRules expands grants into iptables arg vectors for chain, one per
-// (ip, proto, port).
-func portGrantRules(chain string, grants []PortGrant) [][]string {
+// portGrantRules expands grants into arg vectors for chain, one per
+// (ip, proto, port). v6 selects which family's source address is emitted, so
+// each rule lands in the matching table.
+func portGrantRules(chain string, grants []PortGrant, v6 bool) [][]string {
 	var rules [][]string
 	for _, g := range grants {
-		if g.SourceIP == "" {
+		src := g.SourceIP
+		if v6 {
+			src = g.SourceIPv6
+		}
+		if src == "" {
 			continue
 		}
 		for _, port := range g.TCP {
@@ -164,14 +190,14 @@ func portGrantRules(chain string, grants []PortGrant) [][]string {
 				continue
 			}
 			rules = append(rules, []string{"-A", chain,
-				"-s", g.SourceIP, "-p", "tcp", "--dport", strconv.Itoa(port), "-j", "ACCEPT"})
+				"-s", src, "-p", "tcp", "--dport", strconv.Itoa(port), "-j", "ACCEPT"})
 		}
 		for _, port := range g.UDP {
 			if port <= 0 {
 				continue
 			}
 			rules = append(rules, []string{"-A", chain,
-				"-s", g.SourceIP, "-p", "udp", "--dport", strconv.Itoa(port), "-j", "ACCEPT"})
+				"-s", src, "-p", "udp", "--dport", strconv.Itoa(port), "-j", "ACCEPT"})
 		}
 	}
 	return rules
@@ -182,7 +208,7 @@ func grantsEqual(a, b []PortGrant) bool {
 		return false
 	}
 	for i := range a {
-		if a[i].SourceIP != b[i].SourceIP ||
+		if a[i].SourceIP != b[i].SourceIP || a[i].SourceIPv6 != b[i].SourceIPv6 ||
 			!intsEqual(a[i].TCP, b[i].TCP) || !intsEqual(a[i].UDP, b[i].UDP) {
 			return false
 		}
@@ -219,8 +245,15 @@ func (m *Manager) StartWatchdog(ctx context.Context) {
 				if !enabled {
 					continue
 				}
-				// -C exits non-zero when the rule is absent.
-				if err := run(ctx, "iptables", "-C", "INPUT", "-i", iface, "-j", inputChain); err == nil {
+				// -C exits non-zero when the rule is absent, in either table.
+				present := true
+				for _, t := range tables {
+					if err := run(ctx, t.bin, "-C", "INPUT", "-i", iface, "-j", inputChain); err != nil {
+						present = false
+						break
+					}
+				}
+				if present {
 					continue
 				}
 				logging.Warn("firewall: INPUT jump for %s missing — re-applying ruleset", iface)
@@ -244,21 +277,23 @@ func (m *Manager) Stop(ctx context.Context) {
 
 // Errors swallowed — a missing rule is the desired post-state.
 func (m *Manager) teardown(ctx context.Context) {
-	// Drain any accumulated duplicate jumps.
-	for i := 0; i < 8; i++ {
-		if err := run(ctx, "iptables", "-D", "INPUT", "-i", m.cfg.Iface, "-j", inputChain); err != nil {
-			break
+	for _, t := range tables {
+		// Drain any accumulated duplicate jumps.
+		for i := 0; i < 8; i++ {
+			if err := run(ctx, t.bin, "-D", "INPUT", "-i", m.cfg.Iface, "-j", inputChain); err != nil {
+				break
+			}
 		}
-	}
-	for i := 0; i < 8; i++ {
-		if err := run(ctx, "iptables", "-D", "FORWARD", "-i", m.cfg.Iface, "-j", forwardChain); err != nil {
-			break
+		for i := 0; i < 8; i++ {
+			if err := run(ctx, t.bin, "-D", "FORWARD", "-i", m.cfg.Iface, "-j", forwardChain); err != nil {
+				break
+			}
 		}
+		_ = run(ctx, t.bin, "-F", inputChain)
+		_ = run(ctx, t.bin, "-F", forwardChain)
+		_ = run(ctx, t.bin, "-X", inputChain)
+		_ = run(ctx, t.bin, "-X", forwardChain)
 	}
-	_ = run(ctx, "iptables", "-F", inputChain)
-	_ = run(ctx, "iptables", "-F", forwardChain)
-	_ = run(ctx, "iptables", "-X", inputChain)
-	_ = run(ctx, "iptables", "-X", forwardChain)
 }
 
 func run(ctx context.Context, name string, args ...string) error {

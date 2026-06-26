@@ -197,16 +197,18 @@ type ProvisionTranscriptInput struct {
 	DeviceID            string
 	ServerPubKeyB64     string
 	TunnelIP            string
+	TunnelIPv6          string
 	Endpoint            string
 	AllowedIPs          string
 	PersistentKeepalive int
 }
 
 //	sha256("atreos-wg-server-v2" || nonce_bytes || clientPubKey_bytes
-//	       || deviceId || serverPubKey_bytes || tunnelIP
+//	       || deviceId || serverPubKey_bytes || tunnelIP || tunnelIPv6
 //	       || endpoint || allowedIPs || persistentKeepalive)
 //
-// Strings appended as UTF-8; persistentKeepalive as decimal.
+// Strings appended as UTF-8; persistentKeepalive as decimal. tunnelIPv6 is the
+// peer's IPv6 overlay address (empty string when the overlay is v4-only).
 func serverTranscriptV2(in ProvisionTranscriptInput) ([]byte, error) {
 	nonceBytes, err := hex.DecodeString(in.NonceHex)
 	if err != nil {
@@ -227,6 +229,7 @@ func serverTranscriptV2(in ProvisionTranscriptInput) ([]byte, error) {
 	h.Write([]byte(in.DeviceID))
 	h.Write(serverPubKey)
 	h.Write([]byte(in.TunnelIP))
+	h.Write([]byte(in.TunnelIPv6))
 	h.Write([]byte(in.Endpoint))
 	h.Write([]byte(in.AllowedIPs))
 	h.Write([]byte(strconv.Itoa(in.PersistentKeepalive)))

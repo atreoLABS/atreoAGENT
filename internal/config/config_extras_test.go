@@ -72,6 +72,64 @@ func TestEnvOverride_MalformedPortsIgnored(t *testing.T) {
 	}
 }
 
+// TestEnvOverride_StringAndCIDRFields covers the non-port env overrides:
+// the SMTP toggles/limits and the comma-separated CIDR allowlists, which the
+// port-focused test doesn't touch.
+func TestEnvOverride_StringAndCIDRFields(t *testing.T) {
+	t.Setenv("PROXY_TRUSTED_PROXIES", "10.0.0.0/8, 192.168.0.0/16 ,")
+	t.Setenv("SMTP_ENABLED", "true")
+	t.Setenv("SMTP_LISTEN", "10.1.2.3:2525")
+	t.Setenv("SMTP_MAX_MESSAGE_BYTES", "4096")
+	t.Setenv("SMTP_RATE_PER_MINUTE", "7")
+	t.Setenv("SMTP_TLS_ENABLED", "1")
+	t.Setenv("SMTP_TRUSTED_NETWORKS", "fd00:64::/64,100.64.0.0/24")
+
+	cfg := DefaultConfig()
+	applyEnvOverrides(cfg)
+
+	// Empty trailing segment after the last comma is trimmed out.
+	if got := cfg.Proxy.TrustedProxies; len(got) != 2 || got[0] != "10.0.0.0/8" || got[1] != "192.168.0.0/16" {
+		t.Errorf("PROXY_TRUSTED_PROXIES = %v, want [10.0.0.0/8 192.168.0.0/16]", got)
+	}
+	if !cfg.SMTP.Enabled {
+		t.Error("SMTP_ENABLED=true not applied")
+	}
+	if cfg.SMTP.Listen != "10.1.2.3:2525" {
+		t.Errorf("SMTP_LISTEN = %q", cfg.SMTP.Listen)
+	}
+	if cfg.SMTP.MaxMessageBytes != 4096 {
+		t.Errorf("SMTP_MAX_MESSAGE_BYTES = %d", cfg.SMTP.MaxMessageBytes)
+	}
+	if cfg.SMTP.RatePerMinute != 7 {
+		t.Errorf("SMTP_RATE_PER_MINUTE = %d", cfg.SMTP.RatePerMinute)
+	}
+	if !cfg.SMTP.TLSEnabled {
+		t.Error("SMTP_TLS_ENABLED=1 not applied")
+	}
+	if got := cfg.SMTP.TrustedNetworks; len(got) != 2 || got[0] != "fd00:64::/64" || got[1] != "100.64.0.0/24" {
+		t.Errorf("SMTP_TRUSTED_NETWORKS = %v, want the explicit dual-stack pair", got)
+	}
+}
+
+// TestEnvOverride_SMTPBoolsDisable covers the false/0 branches of the SMTP
+// boolean toggles (the true branches are covered above).
+func TestEnvOverride_SMTPBoolsDisable(t *testing.T) {
+	t.Setenv("SMTP_ENABLED", "false")
+	t.Setenv("SMTP_TLS_ENABLED", "0")
+
+	cfg := DefaultConfig()
+	cfg.SMTP.Enabled = true
+	cfg.SMTP.TLSEnabled = true
+	applyEnvOverrides(cfg)
+
+	if cfg.SMTP.Enabled {
+		t.Error("SMTP_ENABLED=false should disable")
+	}
+	if cfg.SMTP.TLSEnabled {
+		t.Error("SMTP_TLS_ENABLED=0 should disable")
+	}
+}
+
 // TestLoad_FillsDefaultsFromEmptyYAML exercises applyDefaults through the
 // public Load entry point — the path real callers use.
 func TestLoad_FillsDefaultsFromEmptyYAML(t *testing.T) {
@@ -88,7 +146,7 @@ func TestLoad_FillsDefaultsFromEmptyYAML(t *testing.T) {
 	if !strings.HasPrefix(cfg.AtreoLinkAPIURL, "https://") {
 		t.Errorf("AtreoLinkAPIURL=%q", cfg.AtreoLinkAPIURL)
 	}
-	if cfg.WireGuard.ListenPort == 0 || cfg.WireGuard.TunnelSubnet == "" || cfg.WireGuard.ServerIP == "" {
+	if cfg.WireGuard.ListenPort == 0 {
 		t.Errorf("WireGuard defaults missing: %+v", cfg.WireGuard)
 	}
 	if cfg.Proxy.HTTPPort == 0 || cfg.Proxy.HTTPSPort == 0 || cfg.Proxy.AuthPort == 0 {

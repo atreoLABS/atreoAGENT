@@ -22,11 +22,15 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.WireGuard.ListenPort != 51820 {
 		t.Errorf("WG ListenPort = %d, want %d", cfg.WireGuard.ListenPort, 51820)
 	}
-	if cfg.WireGuard.TunnelSubnet != "100.64.0.0/24" {
-		t.Errorf("WG TunnelSubnet = %q, want %q", cfg.WireGuard.TunnelSubnet, "100.64.0.0/24")
+	// Overlay addressing is fixed (non-configurable) — assert the constants.
+	if OverlaySubnetV4 != "100.64.0.0/24" {
+		t.Errorf("OverlaySubnetV4 = %q, want %q", OverlaySubnetV4, "100.64.0.0/24")
 	}
-	if cfg.WireGuard.ServerIP != "100.64.0.1" {
-		t.Errorf("WG ServerIP = %q, want %q", cfg.WireGuard.ServerIP, "100.64.0.1")
+	if OverlayServerIPv4 != "100.64.0.1" {
+		t.Errorf("OverlayServerIPv4 = %q, want %q", OverlayServerIPv4, "100.64.0.1")
+	}
+	if OverlayServerIPv6 != "fd00:64::1" {
+		t.Errorf("OverlayServerIPv6 = %q, want %q", OverlayServerIPv6, "fd00:64::1")
 	}
 	if cfg.Proxy.HTTPSPort != 443 {
 		t.Errorf("Proxy HTTPSPort = %d, want %d", cfg.Proxy.HTTPSPort, 443)

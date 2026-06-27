@@ -23,7 +23,7 @@ jobs:
     needs: security
     runs-on: ubuntu-latest
     permissions:
-      contents: write # attach the SBOM as a release asset on tag builds
+      contents: read
       packages: write
       id-token: write # cosign keyless (OIDC) signing
     steps:
@@ -87,8 +87,11 @@ jobs:
       - id: imgref
         run: echo "value=ghcr.io/${GITHUB_REPOSITORY,,}@${{ steps.build.outputs.digest }}" >> "$GITHUB_OUTPUT"
 
-      # SBOM (SPDX) for supply-chain transparency: uploaded as a workflow
-      # artifact and, on tag builds, attached to the GitHub Release.
+      # SBOM (SPDX) for supply-chain transparency, kept as a workflow artifact
+      # and attested to the image below. upload-release-assets stays off: the
+      # SBOM is bound to the image digest (cosign attest) rather than attached
+      # as an unverifiable copy to the GitHub Release — which immutable releases
+      # reject post-publish anyway.
       - name: Generate SBOM
         uses: anchore/sbom-action@v0
         with:
@@ -96,6 +99,7 @@ jobs:
           format: spdx-json
           output-file: sbom.spdx.json
           artifact-name: sbom.spdx.json
+          upload-release-assets: false
 
       # Keyless (OIDC) signature over the pushed digest, so consumers can verify
       # provenance with `cosign verify`.
@@ -103,3 +107,9 @@ jobs:
 
       - name: Sign image
         run: cosign sign --yes "${{ steps.imgref.outputs.value }}"
+
+      # Bind the SBOM to the image digest as a signed in-toto attestation, so
+      # consumers can verify it for the exact digest with
+      # `cosign verify-attestation --type spdxjson`.
+      - name: Attest SBOM
+        run: cosign attest --yes --predicate sbom.spdx.json --type spdxjson "${{ steps.imgref.outputs.value }}"

@@ -23,7 +23,7 @@ jobs:
     needs: security
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write # attach the SBOM as a release asset on tag builds
       packages: write
       id-token: write # cosign keyless (OIDC) signing
     steps:
@@ -87,7 +87,8 @@ jobs:
       - id: imgref
         run: echo "value=ghcr.io/${GITHUB_REPOSITORY,,}@${{ steps.build.outputs.digest }}" >> "$GITHUB_OUTPUT"
 
-      # SBOM (SPDX) for supply-chain transparency; kept as a build artifact.
+      # SBOM (SPDX) for supply-chain transparency: uploaded as a workflow
+      # artifact and, on tag builds, attached to the GitHub Release.
       - name: Generate SBOM
         uses: anchore/sbom-action@v0
         with:

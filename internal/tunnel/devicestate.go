@@ -285,6 +285,9 @@ func (h *Handlers) HandleDeviceState(msg atreolink.TunnelMessage) (*atreolink.Tu
 			if err := json.Unmarshal(dm.StatusEnvelope.Payload, &sp); err != nil {
 				return nil, fmt.Errorf("device:state rejected: member %s status payload: %w", dm.MemberID, err)
 			}
+			if sp.MemberID != dm.MemberID {
+				return nil, fmt.Errorf("device:state rejected: member %s status envelope addresses %s", dm.MemberID, sp.MemberID)
+			}
 			if sp.Status != "active" && sp.Status != "suspended" {
 				return nil, fmt.Errorf("device:state rejected: member %s invalid status %q", dm.MemberID, sp.Status)
 			}
@@ -301,6 +304,9 @@ func (h *Handlers) HandleDeviceState(msg atreolink.TunnelMessage) (*atreolink.Tu
 			var pp MemberPermissionsPayload
 			if err := json.Unmarshal(dm.PermissionsEnvelope.Payload, &pp); err != nil {
 				return nil, fmt.Errorf("device:state rejected: member %s permissions payload: %w", dm.MemberID, err)
+			}
+			if pp.MemberID != dm.MemberID {
+				return nil, fmt.Errorf("device:state rejected: member %s permissions envelope addresses %s", dm.MemberID, pp.MemberID)
 			}
 			expectedIntent := fmt.Sprintf("member:permissions-%s-%s-%d", h.deviceID, pp.MemberID, pp.Timestamp)
 			if err := h.verifyAuthorization(dm.PermissionsEnvelope.AsMessage("member:permissions"), AttestedAuth(ownerPub), pp.CommandEnvelopeFields, expectedIntent); err != nil {

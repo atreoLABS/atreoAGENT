@@ -48,14 +48,14 @@ func NewServer(aclStore *acl.Store, httpsListen, httpListen string, registry *ce
 		webOrigin:       webOrigin,
 	}
 
+	// No upstream keep-alives: a POST that reuses a pooled conn the backend already closed can't be retried and 502s.
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.DisableKeepAlives = true
 	if r := newDockerResolver(defaultDockerSock); r != nil {
-		t := http.DefaultTransport.(*http.Transport).Clone()
 		t.DialContext = r.dialContext
-		s.transport = t
 		logging.Info("Docker socket found — container name resolution enabled for app URLs")
-	} else {
-		s.transport = http.DefaultTransport
 	}
+	s.transport = t
 
 	s.httpServer = &http.Server{
 		Addr:    httpsListen,

@@ -8,15 +8,26 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sync"
 	"time"
 )
 
 const defaultDockerSock = "/var/run/docker.sock"
 
+// Bounds Docker API calls to ~1 per container per TTL; short enough to pick up a restarted container's new IP.
+const resolveTTL = 10 * time.Second
+
 // Lets InternalURL hostnames like http://jellyfin:8096 resolve without
 // exposed ports.
 type dockerResolver struct {
 	client *http.Client
+	mu     sync.Mutex
+	cache  map[string]resolveEntry
+}
+
+type resolveEntry struct {
+	ip      string
+	expires time.Time
 }
 
 // nil = disabled (no socket).
@@ -33,6 +44,7 @@ func newDockerResolver(sockPath string) *dockerResolver {
 				},
 			},
 		},
+		cache: make(map[string]resolveEntry),
 	}
 }
 
@@ -52,6 +64,9 @@ func (d *dockerResolver) dialContext(ctx context.Context, network, addr string) 
 
 // First IP across any of the container's networks.
 func (d *dockerResolver) resolve(ctx context.Context, name string) (string, error) {
+	if ip, ok := d.cached(name); ok {
+		return ip, nil
+	}
 	// PathEscape so a hostile container name can't reshape the path.
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		"http://localhost/v1.41/containers/"+url.PathEscape(name)+"/json", nil)
@@ -79,8 +94,26 @@ func (d *dockerResolver) resolve(ctx context.Context, name string) (string, erro
 	}
 	for _, n := range info.NetworkSettings.Networks {
 		if n.IPAddress != "" {
+			d.store(name, n.IPAddress)
 			return n.IPAddress, nil
 		}
 	}
 	return "", fmt.Errorf("docker: no IP for container %q", name)
+}
+
+// Positive cache only, so a transient Docker failure isn't pinned for the whole TTL.
+func (d *dockerResolver) cached(name string) (string, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	e, ok := d.cache[name]
+	if !ok || time.Now().After(e.expires) {
+		return "", false
+	}
+	return e.ip, true
+}
+
+func (d *dockerResolver) store(name, ip string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.cache[name] = resolveEntry{ip: ip, expires: time.Now().Add(resolveTTL)}
 }

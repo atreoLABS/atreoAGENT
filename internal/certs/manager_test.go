@@ -19,7 +19,7 @@ import (
 func TestManager_EnsureCert_LoadsValidExistingCert(t *testing.T) {
 	dir := t.TempDir()
 	m := NewManager(dir, dir, dir, "ops@example.com", "dev-test", nil) // nil atreolink — issuer never runs
-	suffix := "alice.myatreo.com"
+	suffix := "alice.atreo.link"
 	certPath := filepath.Join(dir, suffix, "cert.pem")
 	keyPath := filepath.Join(dir, suffix, "key.pem")
 	writeSelfSignedCert(t, suffix, certPath, keyPath, 60*24*time.Hour)
@@ -44,12 +44,12 @@ func TestManager_EnsureCert_NormalisesSuffix(t *testing.T) {
 	dir := t.TempDir()
 	m := NewManager(dir, dir, dir, "ops@example.com", "dev-test", nil)
 	// Write the cert under the canonical lowercase name; pass ugly form.
-	suffix := "alice.myatreo.com"
+	suffix := "alice.atreo.link"
 	certPath := filepath.Join(dir, suffix, "cert.pem")
 	keyPath := filepath.Join(dir, suffix, "key.pem")
 	writeSelfSignedCert(t, suffix, certPath, keyPath, 60*24*time.Hour)
 
-	if err := m.EnsureCert(context.Background(), "  *.ALICE.MyAtreo.com.  "); err != nil {
+	if err := m.EnsureCert(context.Background(), "  *.ALICE.Atreo.Link.  "); err != nil {
 		t.Fatalf("EnsureCert: %v", err)
 	}
 	if !m.Registry.Has(suffix) {
@@ -69,7 +69,7 @@ func TestManager_RenewAll_ContinuesOnIssuerFailure(t *testing.T) {
 	// Two suffixes — one with a fresh cert (no renewal needed), one
 	// expiring (renewAll will try to renew, fail because atreolink is
 	// nil, fall back to the on-disk cert).
-	freshSuffix := "alice.myatreo.com"
+	freshSuffix := "alice.atreo.link"
 	expSuffix := "example.com"
 	writeSelfSignedCert(t, freshSuffix,
 		filepath.Join(dir, freshSuffix, "cert.pem"),
@@ -103,7 +103,7 @@ func TestRecordRenewalFailure_BelowThreshold(t *testing.T) {
 	var fired atomic.Int32
 	m.SetOwnerNotifier(func(string, int) { fired.Add(1) })
 
-	suffix := "alice.myatreo.com"
+	suffix := "alice.atreo.link"
 	for i := 0; i < renewalAlertThreshold-1; i++ {
 		m.recordRenewalFailure(suffix)
 	}
@@ -126,7 +126,7 @@ func TestRecordRenewalFailure_AtThresholdFires(t *testing.T) {
 	gotCount := make(chan int, 4)
 	m.SetOwnerNotifier(func(_ string, count int) { gotCount <- count })
 
-	suffix := "alice.myatreo.com"
+	suffix := "alice.atreo.link"
 	for i := 0; i < renewalAlertThreshold; i++ {
 		m.recordRenewalFailure(suffix)
 	}
@@ -152,7 +152,7 @@ func TestRecordRenewalFailure_AtThresholdFires(t *testing.T) {
 // zeroes the failure counter and stamps LastSuccess.
 func TestRecordRenewalSuccess_ResetsCounter(t *testing.T) {
 	m := NewManager(t.TempDir(), t.TempDir(), t.TempDir(), "ops@example.com", "dev-test", nil)
-	suffix := "alice.myatreo.com"
+	suffix := "alice.atreo.link"
 	for i := 0; i < renewalAlertThreshold; i++ {
 		m.recordRenewalFailure(suffix)
 	}
@@ -172,7 +172,7 @@ func TestRecordRenewalSuccess_ResetsCounter(t *testing.T) {
 func TestRenewalState_Persistence(t *testing.T) {
 	dataDir := t.TempDir()
 	m1 := NewManager(t.TempDir(), t.TempDir(), dataDir, "ops@example.com", "dev-test", nil)
-	suffix := "alice.myatreo.com"
+	suffix := "alice.atreo.link"
 	m1.recordRenewalFailure(suffix)
 	m1.recordRenewalFailure(suffix)
 
@@ -205,7 +205,7 @@ func TestLoadRenewalState_RoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "state.json")
 	in := map[string]*RenewalState{
-		"alice.myatreo.com": {
+		"alice.atreo.link": {
 			ConsecutiveFailures: 5,
 			LastAttempt:         time.Now().Truncate(time.Second),
 		},
@@ -218,8 +218,8 @@ func TestLoadRenewalState_RoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := loadRenewalState(path)
-	if got["alice.myatreo.com"].ConsecutiveFailures != 5 {
-		t.Errorf("got %+v", got["alice.myatreo.com"])
+	if got["alice.atreo.link"].ConsecutiveFailures != 5 {
+		t.Errorf("got %+v", got["alice.atreo.link"])
 	}
 }
 
@@ -228,7 +228,7 @@ func TestLoadRenewalState_RoundTrip(t *testing.T) {
 // covers the suffix and has > renewBefore left.
 func TestCertFileIsValidForSuffix(t *testing.T) {
 	dir := t.TempDir()
-	suffix := "alice.myatreo.com"
+	suffix := "alice.atreo.link"
 	certPath := filepath.Join(dir, "cert.pem")
 	keyPath := filepath.Join(dir, "key.pem")
 

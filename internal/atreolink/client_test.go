@@ -67,7 +67,7 @@ func TestInitPairing(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(PairingInitResponse{
 			SessionID: "sess-1",
 			UserCode:  "ABC123",
-			AuthURL:   "https://myatreo.com/approve/sess-1",
+			AuthURL:   "https://atreo.link/approve/sess-1",
 		})
 	}))
 	defer ts.Close()
@@ -96,7 +96,7 @@ func TestPollPairing(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(PairingPollResponse{
 			Status:       "approved",
 			DeviceID:     "dev-1",
-			AppsHostname: "mynas.myatreo.com",
+			AppsHostname: "mynas.atreo.link",
 		})
 	}))
 	defer ts.Close()
@@ -112,8 +112,8 @@ func TestPollPairing(t *testing.T) {
 	if resp.DeviceID != "dev-1" {
 		t.Errorf("DeviceID = %q", resp.DeviceID)
 	}
-	if resp.AppsHostname != "mynas.myatreo.com" {
-		t.Errorf("AppsHostname = %q, want %q", resp.AppsHostname, "mynas.myatreo.com")
+	if resp.AppsHostname != "mynas.atreo.link" {
+		t.Errorf("AppsHostname = %q, want %q", resp.AppsHostname, "mynas.atreo.link")
 	}
 }
 

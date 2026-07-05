@@ -75,7 +75,7 @@ func TestSavePairingLoadRoundTrip(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.DataDir = dir
 	cfg.DeviceID = "dev-001"
-	cfg.AppsHostname = "mynas.myatreo.com"
+	cfg.AppsHostname = "mynas.atreo.link"
 	cfg.TunnelHost = "dev-001.atreo.link"
 
 	if err := cfg.SavePairing(); err != nil {
@@ -275,7 +275,7 @@ func TestLoadNonexistentPath(t *testing.T) {
 func TestProxyEnabledYAMLAbsentDefaultsTrue(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte("apps_hostname: mynas.myatreo.com\n"), 0644); err != nil {
+	if err := os.WriteFile(path, []byte("apps_hostname: mynas.atreo.link\n"), 0644); err != nil {
 		t.Fatalf("write yaml: %v", err)
 	}
 	cfg, err := Load(path)
@@ -286,8 +286,8 @@ func TestProxyEnabledYAMLAbsentDefaultsTrue(t *testing.T) {
 		t.Errorf("Proxy.Enabled = %v, want true (default when YAML omits key)", cfg.Proxy.Enabled)
 	}
 	// Confirm the apps_hostname YAML key parses into the renamed field.
-	if cfg.AppsHostname != "mynas.myatreo.com" {
-		t.Errorf("AppsHostname = %q, want %q", cfg.AppsHostname, "mynas.myatreo.com")
+	if cfg.AppsHostname != "mynas.atreo.link" {
+		t.Errorf("AppsHostname = %q, want %q", cfg.AppsHostname, "mynas.atreo.link")
 	}
 }
 

@@ -29,7 +29,7 @@ func authTestStore(t *testing.T) *acl.Store {
 }
 
 func TestAuthServer_MissingSourceIP(t *testing.T) {
-	s := NewAuthServer(authTestStore(t), ":0", newTestRegistry(t, "mynas.myatreo.com"), nil, nil)
+	s := NewAuthServer(authTestStore(t), ":0", newTestRegistry(t, "mynas.atreo.link"), nil, nil)
 	r := httptest.NewRequest("GET", "/", nil)
 	r.RemoteAddr = "no-port"
 	w := httptest.NewRecorder()
@@ -43,10 +43,10 @@ func TestAuthServer_MissingSourceIP(t *testing.T) {
 // tunnel peer cannot spoof a trusted-network IP to obtain X-Auth-Role:
 // admin. The (untrusted) TCP peer address is used instead.
 func TestAuthServer_XFFIgnoredWithoutTrustedProxy(t *testing.T) {
-	s := NewAuthServer(authTestStore(t), ":0", newTestRegistry(t, "mynas.myatreo.com"), []string{"192.168.0.0/16"}, nil)
+	s := NewAuthServer(authTestStore(t), ":0", newTestRegistry(t, "mynas.atreo.link"), []string{"192.168.0.0/16"}, nil)
 	r := httptest.NewRequest("GET", "/", nil)
 	r.RemoteAddr = "100.64.0.10:5555" // a tunnel peer (Alice)
-	r.Host = "nextcloud.mynas.myatreo.com"
+	r.Host = "nextcloud.mynas.atreo.link"
 	r.Header.Set("X-Forwarded-For", "192.168.1.5")
 	r.Header.Set("X-Forwarded-Host", "junk.example.com")
 	w := httptest.NewRecorder()
@@ -65,11 +65,11 @@ func TestAuthServer_XFFIgnoredWithoutTrustedProxy(t *testing.T) {
 // With no trusted proxy configured, X-Forwarded-Host must be ignored so a
 // peer can't masquerade as a different app's hostname.
 func TestAuthServer_XFHIgnoredWithoutTrustedProxy(t *testing.T) {
-	s := NewAuthServer(authTestStore(t), ":0", newTestRegistry(t, "mynas.myatreo.com"), nil, nil)
+	s := NewAuthServer(authTestStore(t), ":0", newTestRegistry(t, "mynas.atreo.link"), nil, nil)
 	r := httptest.NewRequest("GET", "/", nil)
 	r.RemoteAddr = "100.64.0.10:5555"
 	r.Host = "junk.example.com"
-	r.Header.Set("X-Forwarded-Host", "nextcloud.mynas.myatreo.com")
+	r.Header.Set("X-Forwarded-Host", "nextcloud.mynas.atreo.link")
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, r)
 	if w.Code != http.StatusForbidden {
@@ -80,7 +80,7 @@ func TestAuthServer_XFHIgnoredWithoutTrustedProxy(t *testing.T) {
 // When the TCP peer is a configured trusted proxy, X-Forwarded-For is
 // honoured (and a leading trusted-network IP grants the LAN bypass).
 func TestAuthServer_TrustedProxyHonoursXFF(t *testing.T) {
-	s := NewAuthServer(authTestStore(t), ":0", newTestRegistry(t, "mynas.myatreo.com"),
+	s := NewAuthServer(authTestStore(t), ":0", newTestRegistry(t, "mynas.atreo.link"),
 		[]string{"192.168.0.0/16"}, []string{"10.1.2.0/24"})
 	r := httptest.NewRequest("GET", "/", nil)
 	r.RemoteAddr = "10.1.2.3:443" // the trusted proxy
@@ -100,12 +100,12 @@ func TestAuthServer_TrustedProxyHonoursXFF(t *testing.T) {
 
 // A trusted proxy may also supply the original Host via X-Forwarded-Host.
 func TestAuthServer_TrustedProxyHonoursXFH(t *testing.T) {
-	s := NewAuthServer(authTestStore(t), ":0", newTestRegistry(t, "mynas.myatreo.com"), nil, []string{"10.1.2.0/24"})
+	s := NewAuthServer(authTestStore(t), ":0", newTestRegistry(t, "mynas.atreo.link"), nil, []string{"10.1.2.0/24"})
 	r := httptest.NewRequest("GET", "/", nil)
 	r.RemoteAddr = "10.1.2.3:443"
 	r.Host = "junk.example.com"
 	r.Header.Set("X-Forwarded-For", "100.64.0.10")
-	r.Header.Set("X-Forwarded-Host", "nextcloud.mynas.myatreo.com")
+	r.Header.Set("X-Forwarded-Host", "nextcloud.mynas.atreo.link")
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, r)
 	if w.Code != http.StatusOK {
@@ -120,7 +120,7 @@ func TestAuthServer_TrustedProxyHonoursXFH(t *testing.T) {
 }
 
 func TestAuthServer_UnknownHost(t *testing.T) {
-	s := NewAuthServer(authTestStore(t), ":0", newTestRegistry(t, "mynas.myatreo.com"), nil, nil)
+	s := NewAuthServer(authTestStore(t), ":0", newTestRegistry(t, "mynas.atreo.link"), nil, nil)
 	r := httptest.NewRequest("GET", "/", nil)
 	r.RemoteAddr = "100.64.0.10:5555"
 	r.Host = "junk.example.com"
@@ -132,10 +132,10 @@ func TestAuthServer_UnknownHost(t *testing.T) {
 }
 
 func TestAuthServer_ACLDeny(t *testing.T) {
-	s := NewAuthServer(authTestStore(t), ":0", newTestRegistry(t, "mynas.myatreo.com"), nil, nil)
+	s := NewAuthServer(authTestStore(t), ":0", newTestRegistry(t, "mynas.atreo.link"), nil, nil)
 	r := httptest.NewRequest("GET", "/", nil)
 	r.RemoteAddr = "100.64.0.99:5555" // unknown member
-	r.Host = "nextcloud.mynas.myatreo.com"
+	r.Host = "nextcloud.mynas.atreo.link"
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, r)
 	if w.Code != http.StatusForbidden {
@@ -144,10 +144,10 @@ func TestAuthServer_ACLDeny(t *testing.T) {
 }
 
 func TestAuthServer_ACLAllow(t *testing.T) {
-	s := NewAuthServer(authTestStore(t), ":0", newTestRegistry(t, "mynas.myatreo.com"), nil, nil)
+	s := NewAuthServer(authTestStore(t), ":0", newTestRegistry(t, "mynas.atreo.link"), nil, nil)
 	r := httptest.NewRequest("GET", "/", nil)
 	r.RemoteAddr = "100.64.0.10:5555"
-	r.Host = "nextcloud.mynas.myatreo.com"
+	r.Host = "nextcloud.mynas.atreo.link"
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, r)
 	if w.Code != http.StatusOK {
@@ -162,10 +162,10 @@ func TestAuthServer_ACLAllow(t *testing.T) {
 }
 
 func TestAuthServer_FallbackToHostHeader(t *testing.T) {
-	s := NewAuthServer(authTestStore(t), ":0", newTestRegistry(t, "mynas.myatreo.com"), nil, nil)
+	s := NewAuthServer(authTestStore(t), ":0", newTestRegistry(t, "mynas.atreo.link"), nil, nil)
 	r := httptest.NewRequest("GET", "/", nil)
 	r.RemoteAddr = "100.64.0.10:1234"
-	r.Host = "nextcloud.mynas.myatreo.com"
+	r.Host = "nextcloud.mynas.atreo.link"
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, r)
 	if w.Code != http.StatusOK {

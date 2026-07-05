@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 )
 
@@ -82,6 +83,35 @@ func TestDockerResolver_Resolve_OK(t *testing.T) {
 	}
 	if ip != "172.17.0.5" {
 		t.Errorf("got %q, want 172.17.0.5", ip)
+	}
+}
+
+func TestDockerResolver_Resolve_Caches(t *testing.T) {
+	var calls int32
+	sockPath, cleanup := makeFakeDockerAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
+			"NetworkSettings": map[string]any{
+				"Networks": map[string]any{
+					"bridge": map[string]any{"IPAddress": "172.17.0.9"},
+				},
+			},
+		})
+	}))
+	defer cleanup()
+
+	r := newDockerResolver(sockPath)
+	if r == nil {
+		t.Fatal("expected resolver")
+	}
+	for i := 0; i < 2; i++ {
+		ip, err := r.resolve(context.Background(), "cached")
+		if err != nil || ip != "172.17.0.9" {
+			t.Fatalf("resolve #%d = %q, %v", i, ip, err)
+		}
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Errorf("Docker API calls = %d, want 1 (second served from cache)", got)
 	}
 }
 

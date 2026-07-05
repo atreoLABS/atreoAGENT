@@ -74,11 +74,11 @@ func seededRegistry(t *testing.T, hosts ...string) *Registry {
 
 func TestRegistry_AddRemoveSuffix(t *testing.T) {
 	r := NewRegistry(t.TempDir())
-	r.AddSuffix("alice.myatreo.com")
+	r.AddSuffix("alice.atreo.link")
 	r.AddSuffix("example.com")
 	got := r.Suffixes()
-	// Longest-first ordering — "alice.myatreo.com" (17) before "example.com" (10).
-	want := []string{"alice.myatreo.com", "example.com"}
+	// Longest-first ordering — "alice.atreo.link" (16) before "example.com" (10).
+	want := []string{"alice.atreo.link", "example.com"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Suffixes: got %v, want %v", got, want)
 	}
@@ -86,15 +86,15 @@ func TestRegistry_AddRemoveSuffix(t *testing.T) {
 	if err := r.RemoveSuffix("example.com"); err != nil {
 		t.Fatalf("RemoveSuffix: %v", err)
 	}
-	if got := r.Suffixes(); !reflect.DeepEqual(got, []string{"alice.myatreo.com"}) {
+	if got := r.Suffixes(); !reflect.DeepEqual(got, []string{"alice.atreo.link"}) {
 		t.Errorf("after remove: got %v", got)
 	}
 }
 
 func TestRegistry_AddSuffix_Idempotent(t *testing.T) {
 	r := NewRegistry(t.TempDir())
-	r.AddSuffix("alice.myatreo.com")
-	r.AddSuffix("alice.myatreo.com")
+	r.AddSuffix("alice.atreo.link")
+	r.AddSuffix("alice.atreo.link")
 	if got := r.Suffixes(); len(got) != 1 {
 		t.Errorf("expected 1 suffix, got %v", got)
 	}
@@ -122,8 +122,8 @@ func TestRegistry_NormaliseInputs(t *testing.T) {
 // --- Load + LoadSuffix --------------------------------------------------
 
 func TestRegistry_LoadPicksUpExistingFiles(t *testing.T) {
-	r := seededRegistry(t, "alice.myatreo.com", "example.com")
-	if !r.Has("alice.myatreo.com") {
+	r := seededRegistry(t, "alice.atreo.link", "example.com")
+	if !r.Has("alice.atreo.link") {
 		t.Errorf("expected alice cert loaded")
 	}
 	if !r.Has("example.com") {
@@ -155,19 +155,19 @@ func TestRegistry_HasAny(t *testing.T) {
 	}
 	// AddSuffix without cert leaves entry.cert nil — still no cert
 	// available.
-	r.AddSuffix("alice.myatreo.com")
+	r.AddSuffix("alice.atreo.link")
 	if r.HasAny() {
 		t.Errorf("placeholder entry shouldn't count")
 	}
-	r2 := seededRegistry(t, "alice.myatreo.com")
+	r2 := seededRegistry(t, "alice.atreo.link")
 	if !r2.HasAny() {
 		t.Errorf("seeded registry should HasAny")
 	}
 }
 
 func TestRegistry_GetCertificate_SNIMatch(t *testing.T) {
-	r := seededRegistry(t, "alice.myatreo.com")
-	hello := &tls.ClientHelloInfo{ServerName: "jellyfin.alice.myatreo.com"}
+	r := seededRegistry(t, "alice.atreo.link")
+	hello := &tls.ClientHelloInfo{ServerName: "jellyfin.alice.atreo.link"}
 	cert, err := r.GetCertificate(hello)
 	if err != nil {
 		t.Fatalf("GetCertificate: %v", err)
@@ -180,8 +180,8 @@ func TestRegistry_GetCertificate_SNIMatch(t *testing.T) {
 func TestRegistry_GetCertificate_SNIIsBareSuffix(t *testing.T) {
 	// Some clients send SNI = the suffix itself (no leading slug).
 	// Should still find the cert.
-	r := seededRegistry(t, "alice.myatreo.com")
-	hello := &tls.ClientHelloInfo{ServerName: "alice.myatreo.com"}
+	r := seededRegistry(t, "alice.atreo.link")
+	hello := &tls.ClientHelloInfo{ServerName: "alice.atreo.link"}
 	cert, err := r.GetCertificate(hello)
 	if err != nil {
 		t.Fatalf("GetCertificate: %v", err)
@@ -192,7 +192,7 @@ func TestRegistry_GetCertificate_SNIIsBareSuffix(t *testing.T) {
 }
 
 func TestRegistry_GetCertificate_FallbackOnNoSNI(t *testing.T) {
-	r := seededRegistry(t, "alice.myatreo.com", "example.com")
+	r := seededRegistry(t, "alice.atreo.link", "example.com")
 	cert, err := r.GetCertificate(&tls.ClientHelloInfo{}) // no SNI
 	if err != nil {
 		t.Fatalf("GetCertificate: %v", err)
@@ -214,7 +214,7 @@ func TestRegistry_GetCertificate_UnknownSNI_FallsBack(t *testing.T) {
 	// SNI for a hostname we don't serve — return whatever cert we
 	// have (the connection will likely fail TLS validation but at
 	// least the handshake completes).
-	r := seededRegistry(t, "alice.myatreo.com")
+	r := seededRegistry(t, "alice.atreo.link")
 	cert, err := r.GetCertificate(&tls.ClientHelloInfo{ServerName: "bob.example.com"})
 	if err != nil {
 		t.Fatalf("expected fallback, got error: %v", err)
@@ -227,7 +227,7 @@ func TestRegistry_GetCertificate_UnknownSNI_FallsBack(t *testing.T) {
 // --- Concurrent access --------------------------------------------------
 
 func TestRegistry_ConcurrentAddRemoveLookup(t *testing.T) {
-	r := seededRegistry(t, "alice.myatreo.com")
+	r := seededRegistry(t, "alice.atreo.link")
 	const goroutines = 16
 	const iters = 200
 	var wg sync.WaitGroup
@@ -248,7 +248,7 @@ func TestRegistry_ConcurrentAddRemoveLookup(t *testing.T) {
 					_ = r.Suffixes()
 				case 3:
 					_, _ = r.GetCertificate(&tls.ClientHelloInfo{
-						ServerName: "alice.myatreo.com",
+						ServerName: "alice.atreo.link",
 					})
 				}
 			}
@@ -257,7 +257,7 @@ func TestRegistry_ConcurrentAddRemoveLookup(t *testing.T) {
 	wg.Wait()
 
 	// Original alice cert must still be loaded after the storm.
-	if !r.Has("alice.myatreo.com") {
+	if !r.Has("alice.atreo.link") {
 		t.Errorf("alice cert lost during concurrent workload")
 	}
 }
@@ -265,12 +265,12 @@ func TestRegistry_ConcurrentAddRemoveLookup(t *testing.T) {
 // --- PathsFor / RemoveSuffix file cleanup ------------------------------
 
 func TestRegistry_RemoveSuffix_DeletesFiles(t *testing.T) {
-	r := seededRegistry(t, "alice.myatreo.com")
-	dir := filepath.Join(r.rootDir, "alice.myatreo.com")
+	r := seededRegistry(t, "alice.atreo.link")
+	dir := filepath.Join(r.rootDir, "alice.atreo.link")
 	if _, err := os.Stat(dir); err != nil {
 		t.Fatalf("seed should have created dir: %v", err)
 	}
-	if err := r.RemoveSuffix("alice.myatreo.com"); err != nil {
+	if err := r.RemoveSuffix("alice.atreo.link"); err != nil {
 		t.Fatalf("RemoveSuffix: %v", err)
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
@@ -300,10 +300,10 @@ func TestIsCertValid(t *testing.T) {
 	expiringPath := filepath.Join(dir, "expiring.pem")
 	missingPath := filepath.Join(dir, "missing.pem")
 	// renewBefore is 30d; cert that expires in 60d is valid.
-	writeSelfSignedCert(t, "alice.myatreo.com",
+	writeSelfSignedCert(t, "alice.atreo.link",
 		freshPath, filepath.Join(dir, "fresh.key"), 60*24*time.Hour)
 	// Cert that expires in 5d (well within renewBefore) is invalid.
-	writeSelfSignedCert(t, "alice.myatreo.com",
+	writeSelfSignedCert(t, "alice.atreo.link",
 		expiringPath, filepath.Join(dir, "expiring.key"), 5*24*time.Hour)
 
 	if !isCertValid(freshPath) {
@@ -360,7 +360,7 @@ func writeCertWithSAN(t *testing.T, certPath, keyPath string, dnsNames []string,
 // accepted shapes: wildcard SAN, bare-suffix SAN, and legacy CN-only.
 func TestAssertCertMatchesSuffix_AcceptedShapes(t *testing.T) {
 	dir := t.TempDir()
-	suffix := "alice.myatreo.com"
+	suffix := "alice.atreo.link"
 
 	cases := map[string]struct {
 		dns []string
@@ -369,7 +369,7 @@ func TestAssertCertMatchesSuffix_AcceptedShapes(t *testing.T) {
 		"wildcard SAN":     {dns: []string{"*." + suffix}, cn: ""},
 		"bare SAN":         {dns: []string{suffix}, cn: ""},
 		"legacy CN only":   {dns: nil, cn: suffix},
-		"case-insensitive": {dns: []string{"*.ALICE.MYATREO.COM"}, cn: ""},
+		"case-insensitive": {dns: []string{"*.ALICE.ATREO.LINK"}, cn: ""},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -399,7 +399,7 @@ func TestAssertCertMatchesSuffix_RejectsMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadX509KeyPair: %v", err)
 	}
-	if err := assertCertMatchesSuffix(cert, "alice.myatreo.com"); err == nil {
+	if err := assertCertMatchesSuffix(cert, "alice.atreo.link"); err == nil {
 		t.Fatal("expected mismatch to be rejected")
 	}
 }
@@ -409,7 +409,7 @@ func TestAssertCertMatchesSuffix_RejectsMismatch(t *testing.T) {
 // rejection rather than silently registering an unmatched cert.
 func TestLoadSuffix_RejectsMismatchedCert(t *testing.T) {
 	root := t.TempDir()
-	suffix := "alice.myatreo.com"
+	suffix := "alice.atreo.link"
 	certPath := filepath.Join(root, suffix, "cert.pem")
 	keyPath := filepath.Join(root, suffix, "key.pem")
 	writeCertWithSAN(t, certPath, keyPath, []string{"*.attacker.example"}, "")

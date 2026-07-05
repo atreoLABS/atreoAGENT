@@ -99,7 +99,7 @@ func TestDNSProvider_PresentScopeMismatch(t *testing.T) {
 	p := &atreoLinkDNSProvider{
 		atreolink:     link,
 		ctx:           context.Background(),
-		currentSuffix: "alice.myatreo.com",
+		currentSuffix: "alice.atreo.link",
 		deviceID:      "dev-alice",
 	}
 	err := p.Present("attacker.example", "tok", "key-auth-stub")
@@ -126,7 +126,7 @@ func TestDNSProvider_CleanUpScopeMismatch(t *testing.T) {
 	p := &atreoLinkDNSProvider{
 		atreolink:     link,
 		ctx:           context.Background(),
-		currentSuffix: "alice.myatreo.com",
+		currentSuffix: "alice.atreo.link",
 		deviceID:      "dev-alice",
 	}
 	if err := p.CleanUp("attacker.example", "tok", "key-auth-stub"); err == nil {

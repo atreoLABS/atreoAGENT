@@ -99,6 +99,63 @@ func newACLWithMember(t *testing.T, role string) (store *acl.Store, userID, emai
 	return store, userID, email
 }
 
+// TestHandleMembers_ReturnsEligibleMembers verifies the members list surfaces
+// only members who can actually receive a push: active status + a pinned
+// identity pubkey. Members who haven't logged in (no identity key) and
+// suspended members are omitted.
+func TestHandleMembers_ReturnsEligibleMembers(t *testing.T) {
+	store := acl.NewStore(filepath.Join(t.TempDir(), "acl.json"))
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := base64.StdEncoding.EncodeToString(pub)
+	members := []atreolink.MemberACLEntry{
+		{MemberID: "m1", UserID: "u1", MemberName: "Alice", Email: "alice@example.com", Role: "admin", IdentityKey: key, Status: "active"},
+		{MemberID: "m2", UserID: "u2", MemberName: "Bob", Email: "bob@example.com", Role: "member", IdentityKey: "", Status: "active"},
+		{MemberID: "m3", UserID: "u3", MemberName: "Carol", Email: "carol@example.com", Role: "member", IdentityKey: key, Status: "suspended"},
+	}
+	if err := store.ReplaceAll(members); err != nil {
+		t.Fatalf("ReplaceAll: %v", err)
+	}
+	link := atreolink.NewClient("http://example.invalid", notifyTestKM(t), "")
+	srv, _ := NewServer(8080, t.TempDir(), "agent-uuid", link, store)
+
+	req := authedRequest(t, srv, http.MethodGet, "/v1/members", "")
+	w := httptest.NewRecorder()
+	srv.handleMembers(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body=%s)", w.Code, w.Body.String())
+	}
+	var resp MembersResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Members) != 1 {
+		t.Fatalf("expected 1 eligible member, got %d: %+v", len(resp.Members), resp.Members)
+	}
+	got := resp.Members[0]
+	want := MemberInfo{UserID: "u1", Name: "Alice", Email: "alice@example.com", Role: "admin"}
+	if got != want {
+		t.Errorf("member = %+v, want %+v", got, want)
+	}
+}
+
+func TestHandleMembers_Unauthorized(t *testing.T) {
+	dir := t.TempDir()
+	link := atreolink.NewClient("http://example.invalid", notifyTestKM(t), "")
+	store := acl.NewStore(filepath.Join(dir, "acl.json"))
+	srv, _ := NewServer(8080, dir, "agent-uuid", link, store)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/members", nil)
+	w := httptest.NewRecorder()
+	srv.authMiddleware(srv.handleMembers)(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", w.Code)
+	}
+}
+
 func TestNewServer(t *testing.T) {
 	dir := t.TempDir()
 	link := atreolink.NewClient("http://example.invalid", notifyTestKM(t), "")

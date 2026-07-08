@@ -728,6 +728,48 @@ func (s *Store) findAppBySlug(slug string) *atreolink.App {
 	return nil
 }
 
+// FindPortAppBySlug mirrors findAppBySlug for port apps — the proxy resolves
+// them only to issue a host:port redirect; their traffic never proxies.
+func (s *Store) FindPortAppBySlug(slug string) *atreolink.App {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for i, app := range s.apps {
+		if app.IsPort() && app.EffectiveSlug() == slug {
+			return &s.apps[i]
+		}
+	}
+	for _, m := range s.members {
+		for i, app := range m.AllowedApps {
+			if app.IsPort() && app.EffectiveSlug() == slug {
+				return &m.AllowedApps[i]
+			}
+		}
+	}
+	return nil
+}
+
+// IsPortAppAllowed reports whether sourceIP may reach the port app appSlug.
+// No admin catalogue bypass: the firewall opens raw ports strictly from
+// AllowedApps (see PortGrants), so this stays aligned with what's actually open.
+func (s *Store) IsPortAppAllowed(sourceIP, appSlug string) (bool, *atreolink.App) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	member := s.byTunnelIP[sourceIP]
+	if member == nil {
+		return false, nil
+	}
+	if member.Status != "" && member.Status != "active" {
+		return false, nil
+	}
+	for i, app := range member.AllowedApps {
+		if app.IsPort() && app.EffectiveSlug() == appSlug {
+			return true, &member.AllowedApps[i]
+		}
+	}
+	return false, nil
+}
+
 // PortGrant authorises a peer (by tunnel source IP) to reach raw host ports.
 // TunnelIPv6 is the peer's v6 overlay address (empty on a v4-only overlay) so
 // the firewall can confine the same peer reaching the proxy over either family.

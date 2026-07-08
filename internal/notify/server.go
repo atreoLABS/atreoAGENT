@@ -62,6 +62,7 @@ func (s *Server) Port() int { return s.port }
 func (s *Server) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/notify", s.authMiddleware(s.handleNotify))
+	mux.HandleFunc("GET /v1/members", s.authMiddleware(s.handleMembers))
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", s.port),
@@ -127,6 +128,43 @@ type NotifyRequest struct {
 type NotifyResponse struct {
 	UserID string `json:"userId"`
 	Sent   bool   `json:"sent"`
+}
+
+// MemberInfo is the notification-recipient view of a member: enough for a
+// consumer (e.g. a Home Assistant integration) to build a per-member notifier
+// and target it by userId. No keys or ACL detail leak here.
+type MemberInfo struct {
+	UserID string `json:"userId"`
+	Name   string `json:"name"`
+	Email  string `json:"email"`
+	Role   string `json:"role"`
+}
+
+type MembersResponse struct {
+	Members []MemberInfo `json:"members"`
+}
+
+// handleMembers lists members eligible to receive a notification: active
+// status with a pinned identity pubkey (the same requirements SendToMember
+// enforces). Members who haven't logged in yet, or are suspended, are omitted
+// so callers only ever see targets that will actually deliver.
+func (s *Server) handleMembers(w http.ResponseWriter, r *http.Request) {
+	out := MembersResponse{Members: []MemberInfo{}}
+	for _, m := range s.acl.AllMembers() {
+		if m.IdentityKey == "" {
+			continue
+		}
+		if m.Status != "" && m.Status != "active" {
+			continue
+		}
+		out.Members = append(out.Members, MemberInfo{
+			UserID: m.UserID,
+			Name:   m.MemberName,
+			Email:  m.Email,
+			Role:   m.Role,
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 const maxNotifyBody = 64 * 1024

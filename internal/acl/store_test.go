@@ -212,6 +212,58 @@ func TestPortAppNotReachableOverProxy(t *testing.T) {
 	}
 }
 
+func TestFindPortAppBySlug(t *testing.T) {
+	store := NewStore("")
+	mustReplace(t, store, portTestMembers())
+
+	// Member-permission fallback (no catalogue set).
+	if app := store.FindPortAppBySlug("jellyfin"); app == nil || app.Port != 8096 {
+		t.Errorf("FindPortAppBySlug(jellyfin) = %+v, want port 8096", app)
+	}
+	// Proxy apps are never returned.
+	if app := store.FindPortAppBySlug("nextcloud"); app != nil {
+		t.Error("FindPortAppBySlug must skip proxy apps")
+	}
+	if app := store.FindPortAppBySlug("ghost"); app != nil {
+		t.Error("unknown slug must return nil")
+	}
+
+	// Catalogue hit once definitions are set.
+	store.SetAppDefinitions([]atreolink.App{
+		{ID: "a9", Name: "Grafana", Slug: "grafana", Type: "port", Port: 3000, Protocol: "https"},
+	})
+	if app := store.FindPortAppBySlug("grafana"); app == nil || app.Protocol != "https" {
+		t.Errorf("FindPortAppBySlug(grafana) = %+v, want https port app", app)
+	}
+}
+
+func TestIsPortAppAllowed(t *testing.T) {
+	store := NewStore("")
+	mustReplace(t, store, portTestMembers())
+
+	if ok, app := store.IsPortAppAllowed("100.64.0.3", "minecraft"); !ok || app == nil || app.Port != 25565 {
+		t.Errorf("granted member = %v %+v, want allowed port 25565", ok, app)
+	}
+	// Admins resolve from AllowedApps like everyone else — the firewall
+	// grants derive from the same list, so the answers stay aligned.
+	if ok, _ := store.IsPortAppAllowed("100.64.0.2", "jellyfin"); !ok {
+		t.Error("admin with the app in AllowedApps must be allowed")
+	}
+	// No catalogue bypass: dns is only in the admin's AllowedApps.
+	if ok, _ := store.IsPortAppAllowed("100.64.0.3", "dns"); ok {
+		t.Error("member without the grant must be denied")
+	}
+	if ok, _ := store.IsPortAppAllowed("100.64.0.4", "minecraft"); ok {
+		t.Error("suspended member must be denied")
+	}
+	if ok, _ := store.IsPortAppAllowed("100.64.0.99", "minecraft"); ok {
+		t.Error("unknown IP must be denied")
+	}
+	if ok, _ := store.IsPortAppAllowed("100.64.0.5", "nextcloud"); ok {
+		t.Error("proxy app must not resolve as a port app")
+	}
+}
+
 func intsSetEqual(a, b []int) bool {
 	if len(a) != len(b) {
 		return false

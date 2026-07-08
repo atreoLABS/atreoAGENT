@@ -2,7 +2,9 @@ package proxy
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -54,6 +56,8 @@ func TestExtractSlug(t *testing.T) {
 
 // proxyTestSetup builds an ACL store with one regular member, one admin, and a
 // backend httptest server, returning a configured *Server and the backend.
+// The regular member also holds three port apps (http, https, tcp), mirroring
+// how admission stamps port grants into AllowedApps.
 func proxyTestSetup(t *testing.T) (*Server, *httptest.Server, *acl.Store) {
 	t.Helper()
 
@@ -69,6 +73,10 @@ func proxyTestSetup(t *testing.T) (*Server, *httptest.Server, *acl.Store) {
 		Slug:        "nextcloud",
 		InternalURL: backend.URL,
 	}
+	webPortApp := atreolink.App{ID: "app-dash", Name: "Dashboard", Slug: "dashboard", Type: "port", Port: 8080, Protocol: "http"}
+	tlsPortApp := atreolink.App{ID: "app-secure", Name: "Secure", Slug: "secure", Type: "port", Port: 8443, Protocol: "https"}
+	tcpPortApp := atreolink.App{ID: "app-game", Name: "Game", Slug: "game", Type: "port", Port: 25565, Protocol: "tcp"}
+	allApps := []atreolink.App{app, webPortApp, tlsPortApp, tcpPortApp}
 
 	dir := t.TempDir()
 	store := acl.NewStore(filepath.Join(dir, "acl.json"))
@@ -77,9 +85,9 @@ func proxyTestSetup(t *testing.T) (*Server, *httptest.Server, *acl.Store) {
 			MemberID:    "m-regular",
 			MemberName:  "Alice",
 			Role:        "member",
-			AllowedApps: []atreolink.App{app},
+			AllowedApps: allApps,
 			Clients: []atreolink.ClientRecord{
-				{WGPublicKey: "pk-regular", TunnelIP: "100.64.0.10"},
+				{WGPublicKey: "pk-regular", TunnelIP: "100.64.0.10", TunnelIPv6: "fd00:64::a"},
 			},
 		},
 		{
@@ -93,7 +101,7 @@ func proxyTestSetup(t *testing.T) (*Server, *httptest.Server, *acl.Store) {
 	}); err != nil {
 		t.Fatalf("ReplaceAll: %v", err)
 	}
-	store.SetAppDefinitions([]atreolink.App{app})
+	store.SetAppDefinitions(allApps)
 
 	reg := newTestRegistry(t, "mynas.atreo.link")
 	srv := NewServer(store, ":0", "", reg, []string{"127.0.0.0/8"}, "https://app.atreolink.com")
@@ -116,6 +124,13 @@ func mkRequest(method, host, path, remoteAddr string) *http.Request {
 	r.Host = host
 	r.RemoteAddr = remoteAddr
 	return r
+}
+
+// withLocalAddr stamps the address the connection was accepted on, as
+// net/http does for real connections.
+func withLocalAddr(r *http.Request, ip string, port int) *http.Request {
+	addr := &net.TCPAddr{IP: net.ParseIP(ip), Port: port}
+	return r.WithContext(context.WithValue(r.Context(), http.LocalAddrContextKey, addr))
 }
 
 func TestServeHTTP_AtreolinkSubdomain(t *testing.T) {
@@ -400,4 +415,264 @@ func TestServeHTTP_POSTSurvivesConnectionClosingBackend(t *testing.T) {
 			t.Fatalf("%s: backend never received the request", s.method)
 		}
 	}
+}
+
+// An http/https port app's slug answers with a 307 to the address the client
+// dialed, carrying the app's port and preserving path + query.
+func TestServeHTTP_PortAppRedirect(t *testing.T) {
+	tests := []struct {
+		name         string
+		host         string
+		path         string
+		remoteAddr   string
+		localIP      string
+		wantLocation string
+	}{
+		{"tunnel member http", "dashboard.mynas.atreo.link", "/some/page?x=1",
+			"100.64.0.10:5555", "100.64.0.1", "http://100.64.0.1:8080/some/page?x=1"},
+		{"tunnel member https app", "secure.mynas.atreo.link", "/",
+			"100.64.0.10:5555", "100.64.0.1", "https://100.64.0.1:8443/"},
+		{"tunnel member v6", "dashboard.mynas.atreo.link", "/",
+			"[fd00:64::a]:5555", "fd00:64::1", "http://[fd00:64::1]:8080/"},
+		{"trusted lan", "dashboard.mynas.atreo.link", "/",
+			"127.0.0.1:5555", "192.168.10.9", "http://192.168.10.9:8080/"},
+		// No conn-local address available: overlay fallback per family.
+		{"missing local addr v4", "dashboard.mynas.atreo.link", "/",
+			"100.64.0.10:5555", "", "http://100.64.0.1:8080/"},
+		{"missing local addr v6", "dashboard.mynas.atreo.link", "/",
+			"[fd00:64::a]:5555", "", "http://[fd00:64::1]:8080/"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, _, _ := proxyTestSetup(t)
+			r := mkRequest("GET", tt.host, tt.path, tt.remoteAddr)
+			if tt.localIP != "" {
+				r = withLocalAddr(r, tt.localIP, 443)
+			}
+			w := httptest.NewRecorder()
+			srv.ServeHTTP(w, r)
+			if w.Code != http.StatusTemporaryRedirect {
+				t.Fatalf("status=%d body=%q, want 307", w.Code, w.Body.String())
+			}
+			if got := w.Header().Get("Location"); got != tt.wantLocation {
+				t.Errorf("Location=%q, want %q", got, tt.wantLocation)
+			}
+		})
+	}
+}
+
+func TestServeHTTP_PortAppRedirect_Denied(t *testing.T) {
+	t.Run("member without grant", func(t *testing.T) {
+		srv, _, store := proxyTestSetup(t)
+		if !store.SetAllowedApps("m-regular", nil) {
+			t.Fatal("SetAllowedApps returned false")
+		}
+		r := withLocalAddr(mkRequest("GET", "dashboard.mynas.atreo.link", "/", "100.64.0.10:5555"), "100.64.0.1", 443)
+		w := httptest.NewRecorder()
+		srv.ServeHTTP(w, r)
+		if w.Code != http.StatusForbidden {
+			t.Errorf("status=%d, want 403", w.Code)
+		}
+	})
+
+	t.Run("unknown tunnel IP", func(t *testing.T) {
+		srv, _, _ := proxyTestSetup(t)
+		r := withLocalAddr(mkRequest("GET", "dashboard.mynas.atreo.link", "/", "100.64.0.99:5555"), "100.64.0.1", 443)
+		w := httptest.NewRecorder()
+		srv.ServeHTTP(w, r)
+		if w.Code != http.StatusForbidden {
+			t.Errorf("status=%d, want 403", w.Code)
+		}
+	})
+
+	// tcp/udp slugs stay unroutable: nothing a browser could follow.
+	t.Run("tcp app member", func(t *testing.T) {
+		srv, _, _ := proxyTestSetup(t)
+		r := withLocalAddr(mkRequest("GET", "game.mynas.atreo.link", "/", "100.64.0.10:5555"), "100.64.0.1", 443)
+		w := httptest.NewRecorder()
+		srv.ServeHTTP(w, r)
+		if w.Code != http.StatusForbidden {
+			t.Errorf("status=%d, want 403", w.Code)
+		}
+	})
+
+	t.Run("tcp app trusted", func(t *testing.T) {
+		srv, _, _ := proxyTestSetup(t)
+		r := withLocalAddr(mkRequest("GET", "game.mynas.atreo.link", "/", "127.0.0.1:5555"), "192.168.10.9", 443)
+		w := httptest.NewRecorder()
+		srv.ServeHTTP(w, r)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("status=%d, want 404", w.Code)
+		}
+	})
+}
+
+// GET /net on the reserved subdomain reports the network path and the dialed
+// address to tunnel/trusted clients; everyone and everything else keeps the
+// bare 204 canary.
+func TestServeHTTP_ReservedNet(t *testing.T) {
+	decode := func(t *testing.T, w *httptest.ResponseRecorder) map[string]string {
+		t.Helper()
+		var m map[string]string
+		if err := json.Unmarshal(w.Body.Bytes(), &m); err != nil {
+			t.Fatalf("bad JSON %q: %v", w.Body.String(), err)
+		}
+		return m
+	}
+
+	t.Run("tunnel peer", func(t *testing.T) {
+		srv, _, _ := proxyTestSetup(t)
+		r := withLocalAddr(mkRequest("GET", "atreolink.mynas.atreo.link", "/net", "100.64.0.10:5555"), "100.64.0.1", 443)
+		w := httptest.NewRecorder()
+		srv.ServeHTTP(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status=%d, want 200", w.Code)
+		}
+		if got := decode(t, w); got["via"] != "tunnel" || got["host"] != "100.64.0.1" {
+			t.Errorf("body=%v, want via=tunnel host=100.64.0.1", got)
+		}
+		if got := w.Header().Get("Access-Control-Allow-Origin"); got != "https://app.atreolink.com" {
+			t.Errorf("CORS origin=%q", got)
+		}
+		if got := w.Header().Get("Cache-Control"); got != "no-store" {
+			t.Errorf("Cache-Control=%q, want no-store", got)
+		}
+	})
+
+	t.Run("trusted lan", func(t *testing.T) {
+		srv, _, _ := proxyTestSetup(t)
+		r := withLocalAddr(mkRequest("GET", "atreolink.mynas.atreo.link", "/net", "127.0.0.1:5555"), "192.168.10.9", 443)
+		w := httptest.NewRecorder()
+		srv.ServeHTTP(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status=%d, want 200", w.Code)
+		}
+		if got := decode(t, w); got["via"] != "lan" || got["host"] != "192.168.10.9" {
+			t.Errorf("body=%v, want via=lan host=192.168.10.9", got)
+		}
+	})
+
+	t.Run("unknown source stays canary", func(t *testing.T) {
+		srv, _, _ := proxyTestSetup(t)
+		r := withLocalAddr(mkRequest("GET", "atreolink.mynas.atreo.link", "/net", "10.0.0.1:5555"), "203.0.113.7", 443)
+		w := httptest.NewRecorder()
+		srv.ServeHTTP(w, r)
+		if w.Code != http.StatusNoContent {
+			t.Errorf("status=%d, want 204", w.Code)
+		}
+	})
+
+	t.Run("POST stays canary", func(t *testing.T) {
+		srv, _, _ := proxyTestSetup(t)
+		r := withLocalAddr(mkRequest("POST", "atreolink.mynas.atreo.link", "/net", "100.64.0.10:5555"), "100.64.0.1", 443)
+		w := httptest.NewRecorder()
+		srv.ServeHTTP(w, r)
+		if w.Code != http.StatusNoContent {
+			t.Errorf("status=%d, want 204", w.Code)
+		}
+	})
+
+	t.Run("missing local addr stays canary", func(t *testing.T) {
+		srv, _, _ := proxyTestSetup(t)
+		r := mkRequest("GET", "atreolink.mynas.atreo.link", "/net", "100.64.0.10:5555")
+		w := httptest.NewRecorder()
+		srv.ServeHTTP(w, r)
+		if w.Code != http.StatusNoContent {
+			t.Errorf("status=%d, want 204", w.Code)
+		}
+	})
+}
+
+// The whole atreo- prefix is a reserved namespace: atreo-net (web probe),
+// atreo-lan (mobile probe), and any future internal host short-circuit to the
+// reachability response instead of resolving an app.
+func TestServeHTTP_ReservedPrefix(t *testing.T) {
+	for _, host := range []string{"atreo-net", "atreo-lan", "atreo-future"} {
+		t.Run(host+" serves /net", func(t *testing.T) {
+			srv, _, _ := proxyTestSetup(t)
+			r := withLocalAddr(mkRequest("GET", host+".mynas.atreo.link", "/net", "100.64.0.10:5555"), "100.64.0.1", 443)
+			w := httptest.NewRecorder()
+			srv.ServeHTTP(w, r)
+			if w.Code != http.StatusOK {
+				t.Fatalf("status=%d, want 200", w.Code)
+			}
+			var body map[string]string
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+				t.Fatalf("bad JSON %q: %v", w.Body.String(), err)
+			}
+			if body["via"] != "tunnel" || body["host"] != "100.64.0.1" {
+				t.Errorf("body=%v, want via=tunnel host=100.64.0.1", body)
+			}
+		})
+		t.Run(host+" canary on other paths", func(t *testing.T) {
+			srv, _, _ := proxyTestSetup(t)
+			r := mkRequest("GET", host+".mynas.atreo.link", "/", "10.0.0.1:1234")
+			w := httptest.NewRecorder()
+			srv.ServeHTTP(w, r)
+			if w.Code != http.StatusNoContent {
+				t.Errorf("status=%d, want 204", w.Code)
+			}
+		})
+	}
+}
+
+// Over a real TCP connection (no injected context), net/http stamps the
+// conn-local address itself — the redirect host and /net must pick it up.
+func TestServeHTTP_RealConnLocalAddr(t *testing.T) {
+	srv, _, _ := proxyTestSetup(t)
+	ts := httptest.NewServer(srv)
+	t.Cleanup(ts.Close)
+
+	wantHost, _, err := net.SplitHostPort(strings.TrimPrefix(ts.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	client := &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	get := func(t *testing.T, host, path string) *http.Response {
+		t.Helper()
+		req, err := http.NewRequest("GET", ts.URL+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Host = host
+		res, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+
+	t.Run("redirect", func(t *testing.T) {
+		res := get(t, "dashboard.mynas.atreo.link", "/p?q=1")
+		defer func() { _ = res.Body.Close() }()
+		if res.StatusCode != http.StatusTemporaryRedirect {
+			t.Fatalf("status=%d, want 307", res.StatusCode)
+		}
+		want := "http://" + wantHost + ":8080/p?q=1"
+		if got := res.Header.Get("Location"); got != want {
+			t.Errorf("Location=%q, want %q", got, want)
+		}
+	})
+
+	t.Run("net", func(t *testing.T) {
+		res := get(t, "atreolink.mynas.atreo.link", "/net")
+		defer func() { _ = res.Body.Close() }()
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("status=%d, want 200", res.StatusCode)
+		}
+		var body map[string]string
+		if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["via"] != "lan" || body["host"] != wantHost {
+			t.Errorf("body=%v, want via=lan host=%s", body, wantHost)
+		}
+	})
 }

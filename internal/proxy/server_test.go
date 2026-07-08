@@ -646,12 +646,12 @@ func TestServeHTTP_RealConnLocalAddr(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { _ = res.Body.Close() })
 		return res
 	}
 
 	t.Run("redirect", func(t *testing.T) {
 		res := get(t, "dashboard.mynas.atreo.link", "/p?q=1")
+		defer func() { _ = res.Body.Close() }()
 		if res.StatusCode != http.StatusTemporaryRedirect {
 			t.Fatalf("status=%d, want 307", res.StatusCode)
 		}
@@ -663,6 +663,7 @@ func TestServeHTTP_RealConnLocalAddr(t *testing.T) {
 
 	t.Run("net", func(t *testing.T) {
 		res := get(t, "atreolink.mynas.atreo.link", "/net")
+		defer func() { _ = res.Body.Close() }()
 		if res.StatusCode != http.StatusOK {
 			t.Fatalf("status=%d, want 200", res.StatusCode)
 		}

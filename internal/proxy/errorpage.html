@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
 <title>{{.Status}} · {{.Title}}</title>
-{{.FaviconLink}}
+{{template "favicon"}}
 <style>
   /* Always dark: the wordmark's white text needs a dark card. */
   :root { color-scheme: dark; }
@@ -72,7 +72,7 @@
 <body>
 <main>
   <div class="brand">
-    {{.Logo}}
+    {{template "logo"}}
   </div>
   <p class="eyebrow">Error {{.Status}} · {{.StatusText}}</p>
   <h1>{{.Title}}</h1>

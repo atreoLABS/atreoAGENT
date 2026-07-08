@@ -83,10 +83,14 @@ var errorPages = renderErrorPages()
 
 func renderErrorPages() map[errorKind][]byte {
 	tmpl := template.Must(template.New("errorpage").Parse(errorPageHTML))
-	// Verbatim <link> so html/template's URL normalizer doesn't entity-encode
-	// the base64 '+' and '/'.
-	favicon := template.HTML(`<link rel="icon" href="data:image/svg+xml;base64,` +
-		base64.StdEncoding.EncodeToString([]byte(logoIconSVG)) + `">`)
+	// The brand assets are attached as nested templates, not injected as
+	// template.HTML values: their markup emits verbatim (no request data is ever
+	// involved) and, as template text, dodges the URL normalizer that would
+	// entity-encode the favicon's base64 '+'/'/'.
+	template.Must(tmpl.New("logo").Parse(logoWordmarkSVG))
+	favicon := `<link rel="icon" href="data:image/svg+xml;base64,` +
+		base64.StdEncoding.EncodeToString([]byte(logoIconSVG)) + `">`
+	template.Must(tmpl.New("favicon").Parse(favicon))
 
 	pages := make(map[errorKind][]byte, len(errorContents))
 	for kind, c := range errorContents {
@@ -97,17 +101,12 @@ func renderErrorPages() map[errorKind][]byte {
 			Title      string
 			Message    string
 			Guidance   string
-			// From embedded assets, never request data — safe to skip escaping.
-			Logo        template.HTML
-			FaviconLink template.HTML
 		}{
-			Status:      c.status,
-			StatusText:  http.StatusText(c.status),
-			Title:       c.title,
-			Message:     c.message,
-			Guidance:    c.guidance,
-			Logo:        template.HTML(logoWordmarkSVG),
-			FaviconLink: favicon,
+			Status:     c.status,
+			StatusText: http.StatusText(c.status),
+			Title:      c.title,
+			Message:    c.message,
+			Guidance:   c.guidance,
 		}
 		// Constant inputs — any failure is a build-time template bug the tests catch.
 		if err := tmpl.Execute(&buf, data); err != nil {

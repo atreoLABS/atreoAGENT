@@ -119,7 +119,7 @@ func (s *Server) Start(ctx context.Context) error {
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	sourceIP, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		http.Error(w, "Bad request", http.StatusBadRequest)
+		writeErrorPage(w, r, errKindBadRequest)
 		return
 	}
 
@@ -134,7 +134,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r.Method, r.Host, suffixes, slug, sourceIP)
 	if slug == "" {
 		logging.Warn("Proxy: 404 — no slug extracted from Host=%q (suffixes=%v)", r.Host, suffixes)
-		http.Error(w, "Not found", http.StatusNotFound)
+		writeErrorPage(w, r, errKindNotFound)
 		return
 	}
 
@@ -147,7 +147,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			logging.Warn("Proxy: 404 — app slug %q not found in ACL", slug)
-			http.Error(w, "Not found", http.StatusNotFound)
+			writeErrorPage(w, r, errKindNotFound)
 			return
 		}
 		s.proxyTo(w, r, app, slug)
@@ -167,7 +167,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			logging.Warn("Proxy: 403 — member %s (role=%s) denied access to slug %q",
 				member.MemberName, member.Role, slug)
 		}
-		http.Error(w, "Forbidden", http.StatusForbidden)
+		writeErrorPage(w, r, errKindForbidden)
 		return
 	}
 
@@ -252,7 +252,8 @@ func localIP(r *http.Request) string {
 func (s *Server) proxyTo(w http.ResponseWriter, r *http.Request, app *atreolink.App, slug string) {
 	target, err := url.Parse(app.InternalURL)
 	if err != nil {
-		http.Error(w, "Bad gateway", http.StatusBadGateway)
+		logging.Warn("Proxy: 502 — invalid internal URL for %s: %v", slug, err)
+		writeErrorPage(w, r, errKindBadGateway)
 		return
 	}
 	proxy := &httputil.ReverseProxy{
@@ -262,9 +263,9 @@ func (s *Server) proxyTo(w http.ResponseWriter, r *http.Request, app *atreolink.
 			pr.SetXForwarded()
 			pr.Out.Host = pr.In.Host // SetURL blanks Out.Host; preserve vhost passthrough.
 		},
-		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			logging.Error("Proxy error for %s: %v", slug, err)
-			http.Error(w, "Bad gateway", http.StatusBadGateway)
+			writeErrorPage(w, r, errKindBadGateway)
 		},
 	}
 	proxy.ServeHTTP(w, r)

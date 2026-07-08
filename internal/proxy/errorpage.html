@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>{{.Status}} · {{.Title}}</title>
+{{template "favicon"}}
+<style>
+  /* Always dark: the wordmark's white text needs a dark card. */
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    --bg: #0e1117;
+    --card: #171b22;
+    --border: #262c36;
+    --fg: #e8ebf0;
+    --muted: #9aa4b5;
+    --accent: #6ea0ff;
+    --shadow: rgba(0, 0, 0, 0.40);
+    margin: 0;
+    min-height: 100vh;
+    min-height: 100dvh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  main {
+    width: 100%;
+    max-width: 27rem;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 2.25rem;
+    box-shadow: 0 10px 40px var(--shadow);
+  }
+  .brand {
+    margin-bottom: 1.75rem;
+  }
+  .brand svg {
+    height: 34px;
+    width: auto;
+    display: block;
+  }
+  .eyebrow {
+    margin: 0 0 0.5rem;
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    color: var(--accent);
+  }
+  h1 {
+    margin: 0 0 0.85rem;
+    font-size: 1.5rem;
+    line-height: 1.25;
+  }
+  p { margin: 0 0 0.9rem; }
+  p:last-child { margin-bottom: 0; }
+  .guidance {
+    color: var(--muted);
+    font-size: 0.95rem;
+  }
+</style>
+</head>
+<body>
+<main>
+  <div class="brand">
+    {{template "logo"}}
+  </div>
+  <p class="eyebrow">Error {{.Status}} · {{.StatusText}}</p>
+  <h1>{{.Title}}</h1>
+  <p>{{.Message}}</p>
+  <p class="guidance">{{.Guidance}}</p>
+</main>
+</body>
+</html>

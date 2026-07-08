@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 328 80">
+  <defs>
+    <linearGradient id="iconBg" x1="0" y1="0" x2="40" y2="80" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#4F8EF7"/>
+      <stop offset="100%" stop-color="#1D4ED8"/>
+    </linearGradient>
+  </defs>
+  <rect width="80" height="80" rx="16" fill="url(#iconBg)"/>
+  <circle cx="38.8" cy="40" r="21.9" fill="white"/>
+  <path d="M 54.1 20.3 C 54.1 17.5 60.0 17.5 60.0 20.3 L 62.8 59.7 C 62.8 62.2 51.3 62.2 51.3 59.7 Z" fill="#CBD5E1"/>
+  <circle cx="38.8" cy="40" r="11.3" fill="url(#iconBg)"/>
+  <circle cx="38.8" cy="40" r="2" fill="white"/>
+  <text x="100" y="54" font-family="-apple-system, BlinkMacSystemFont, system-ui, 'Segoe UI', sans-serif" font-size="40" font-weight="700" fill="white" letter-spacing="-1"><tspan>atreo</tspan><tspan fill="#60A5FA">LINK</tspan></text>
+</svg>

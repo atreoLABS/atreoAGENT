@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"html"
 	"io"
 	"net"
 	"net/http"
@@ -330,6 +331,112 @@ func TestServeHTTP_BadGatewayOnInvalidURL(t *testing.T) {
 	srv.ServeHTTP(w, r)
 	if w.Code != http.StatusBadGateway {
 		t.Errorf("status=%d, want 502", w.Code)
+	}
+}
+
+// Browsers get the branded HTML page on every reachable error path; the status
+// code and guidance copy must both survive end-to-end through ServeHTTP.
+func TestServeHTTP_HTMLErrorNegotiation(t *testing.T) {
+	tests := []struct {
+		name       string
+		host       string
+		remoteAddr string
+		wantStatus int
+		wantKind   errorKind
+	}{
+		{"no slug", "mynas.atreo.link", "100.64.0.10:1234", http.StatusNotFound, errKindNotFound},
+		{"trusted unknown app", "ghost.mynas.atreo.link", "127.0.0.1:5555", http.StatusNotFound, errKindNotFound},
+		{"acl deny", "nextcloud.mynas.atreo.link", "100.64.0.99:5555", http.StatusForbidden, errKindForbidden},
+		{"bad remote addr", "nextcloud.mynas.atreo.link", "no-port-here", http.StatusBadRequest, errKindBadRequest},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, _, _ := proxyTestSetup(t)
+			r := mkRequest("GET", tt.host, "/", tt.remoteAddr)
+			r.Header.Set("Accept", browserAccept)
+			w := httptest.NewRecorder()
+			srv.ServeHTTP(w, r)
+
+			if w.Code != tt.wantStatus {
+				t.Errorf("status=%d, want %d", w.Code, tt.wantStatus)
+			}
+			if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+				t.Errorf("Content-Type=%q, want text/html", ct)
+			}
+			if guidance := html.EscapeString(errorContents[tt.wantKind].guidance); !strings.Contains(w.Body.String(), guidance) {
+				t.Errorf("body missing guidance %q", guidance)
+			}
+		})
+	}
+}
+
+// The upstream-down 502 page must never leak the backend address or the raw
+// dial error to a family member's browser.
+func TestServeHTTP_ErrorPage_NoInternalLeakage(t *testing.T) {
+	// A listener opened then immediately closed guarantees connection-refused
+	// without depending on a port staying free.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadAddr := ln.Addr().String()
+	_ = ln.Close()
+
+	app := atreolink.App{ID: "app-x", Slug: "x", InternalURL: "http://" + deadAddr}
+	store := acl.NewStore(filepath.Join(t.TempDir(), "acl.json"))
+	if err := store.ReplaceAll([]atreolink.MemberACLEntry{{
+		MemberID: "m", Role: "admin",
+		Clients: []atreolink.ClientRecord{{WGPublicKey: "pk", TunnelIP: "100.64.0.30"}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	store.SetAppDefinitions([]atreolink.App{app})
+	reg := newTestRegistry(t, "mynas.atreo.link")
+	srv := NewServer(store, ":0", "", reg, []string{"127.0.0.0/8"}, "")
+
+	r := mkRequest("GET", "x.mynas.atreo.link", "/", "127.0.0.1:5555")
+	r.Header.Set("Accept", browserAccept)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, r)
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("status=%d, want 502", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.HasPrefix(w.Header().Get("Content-Type"), "text/html") {
+		t.Errorf("Content-Type=%q, want text/html", w.Header().Get("Content-Type"))
+	}
+	for _, leak := range []string{deadAddr, "connection refused", "dial tcp"} {
+		if strings.Contains(body, leak) {
+			t.Errorf("502 page leaks internal detail %q", leak)
+		}
+	}
+}
+
+// The invalid-URL 502 page must not echo the raw InternalURL back to the client.
+func TestServeHTTP_ErrorPage_InvalidURLNoLeak(t *testing.T) {
+	store := acl.NewStore(filepath.Join(t.TempDir(), "acl.json"))
+	bad := atreolink.App{ID: "x", Slug: "x", InternalURL: "://broken"}
+	if err := store.ReplaceAll([]atreolink.MemberACLEntry{{
+		MemberID: "m", Role: "admin",
+		Clients: []atreolink.ClientRecord{{WGPublicKey: "pk", TunnelIP: "100.64.0.30"}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	store.SetAppDefinitions([]atreolink.App{bad})
+	reg := newTestRegistry(t, "mynas.atreo.link")
+	srv := NewServer(store, ":0", "", reg, nil, "")
+
+	r := mkRequest("GET", "x.mynas.atreo.link", "/", "100.64.0.30:5555")
+	r.Header.Set("Accept", browserAccept)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, r)
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("status=%d, want 502", w.Code)
+	}
+	if strings.Contains(w.Body.String(), "broken") {
+		t.Errorf("502 page leaks raw InternalURL")
 	}
 }
 

@@ -83,6 +83,7 @@ func TestEnvOverride_StringAndCIDRFields(t *testing.T) {
 	t.Setenv("SMTP_RATE_PER_MINUTE", "7")
 	t.Setenv("SMTP_TLS_ENABLED", "1")
 	t.Setenv("SMTP_TRUSTED_NETWORKS", "fd00:64::/64,100.64.0.0/24")
+	t.Setenv("SMTP_CATCH_ALL", "catchall@example.com")
 
 	cfg := DefaultConfig()
 	applyEnvOverrides(cfg)
@@ -108,6 +109,9 @@ func TestEnvOverride_StringAndCIDRFields(t *testing.T) {
 	}
 	if got := cfg.SMTP.TrustedNetworks; len(got) != 2 || got[0] != "fd00:64::/64" || got[1] != "100.64.0.0/24" {
 		t.Errorf("SMTP_TRUSTED_NETWORKS = %v, want the explicit dual-stack pair", got)
+	}
+	if cfg.SMTP.CatchAll != "catchall@example.com" {
+		t.Errorf("SMTP_CATCH_ALL = %q", cfg.SMTP.CatchAll)
 	}
 }
 

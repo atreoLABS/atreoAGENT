@@ -158,6 +158,94 @@ func TestRcpt_MultipleRcptsRejected(t *testing.T) {
 	}
 }
 
+func TestRcpt_CatchAll_RoutesUnknownToCatchAllMember(t *testing.T) {
+	s := newSessionFor(t, []atreolink.MemberACLEntry{
+		{MemberID: "m1", Role: "admin", Email: "alice@example.com"},
+		{MemberID: "m2", Role: "member", Email: "catchall@example.com"},
+	})
+	s.server.cfg.CatchAll = "catchall@example.com"
+	if err := s.Rcpt("ghost@example.com", nil); err != nil {
+		t.Fatalf("expected catch-all accept, got %v", err)
+	}
+	if s.recipient == nil || s.recipient.MemberID != "m2" {
+		t.Errorf("expected routing to catch-all member m2, got %+v", s.recipient)
+	}
+	if !s.catchAll || s.rcptTo != "ghost@example.com" {
+		t.Errorf("catch-all state not recorded: catchAll=%v rcptTo=%q", s.catchAll, s.rcptTo)
+	}
+}
+
+// A configured catch-all must not shadow a real recipient — known addresses
+// still route directly and stay unflagged.
+func TestRcpt_CatchAll_KnownRecipientStillDirect(t *testing.T) {
+	s := newSessionFor(t, []atreolink.MemberACLEntry{
+		{MemberID: "m1", Role: "admin", Email: "alice@example.com"},
+		{MemberID: "m2", Role: "member", Email: "catchall@example.com"},
+	})
+	s.server.cfg.CatchAll = "catchall@example.com"
+	if err := s.Rcpt("alice@example.com", nil); err != nil {
+		t.Fatalf("known recipient should route directly, got %v", err)
+	}
+	if s.recipient == nil || s.recipient.MemberID != "m1" {
+		t.Errorf("expected direct routing to m1, got %+v", s.recipient)
+	}
+	if s.catchAll {
+		t.Error("known recipient must not be flagged as catch-all")
+	}
+}
+
+func TestRcpt_CatchAll_Unconfigured_StillRejects(t *testing.T) {
+	s := newSessionFor(t, []atreolink.MemberACLEntry{
+		{MemberID: "m1", Role: "admin", Email: "alice@example.com"},
+	})
+	err := s.Rcpt("ghost@example.com", nil)
+	se, ok := err.(*gosmtp.SMTPError)
+	if !ok || se.Code != 550 || se.EnhancedCode != (gosmtp.EnhancedCode{5, 1, 1}) {
+		t.Errorf("expected 550 5.1.1 with no catch-all, got %v", err)
+	}
+}
+
+// A catch-all pointing at a non-member is a misconfiguration; it must not
+// admit the mail — reject exactly as if no catch-all were set.
+func TestRcpt_CatchAll_ConfiguredButUnresolvable_Rejects(t *testing.T) {
+	s := newSessionFor(t, []atreolink.MemberACLEntry{
+		{MemberID: "m1", Role: "admin", Email: "alice@example.com"},
+	})
+	s.server.cfg.CatchAll = "nobody@example.com"
+	err := s.Rcpt("ghost@example.com", nil)
+	se, ok := err.(*gosmtp.SMTPError)
+	if !ok || se.Code != 550 || se.EnhancedCode != (gosmtp.EnhancedCode{5, 1, 1}) {
+		t.Errorf("expected 550 5.1.1 when catch-all is not a member, got %v", err)
+	}
+}
+
+// Catch-all delivery folds the address the sender actually used into the
+// "From" line, keeping the original sender too.
+func TestData_CatchAll_AnnotatesFrom(t *testing.T) {
+	s := newSessionFor(t, []atreolink.MemberACLEntry{
+		{MemberID: "m1", Role: "admin", Email: "catchall@example.com"},
+	})
+	s.server.cfg.CatchAll = "catchall@example.com"
+	s.from = "sender@app.local"
+	if err := s.Rcpt("ghost@example.com", nil); err != nil {
+		t.Fatalf("catch-all Rcpt should accept, got %v", err)
+	}
+	body := "Subject: alert\r\nFrom: Grafana <alerts@grafana.local>\r\n\r\nsomething happened\r\n"
+	if err := s.Data(strings.NewReader(body)); err != nil {
+		t.Fatalf("Data: %v", err)
+	}
+	_, _, req := s.server.notify.(*fakeNotify).snapshot()
+	if req == nil {
+		t.Fatal("no notify request recorded")
+	}
+	if !strings.Contains(req.EmailFrom, "ghost@example.com") {
+		t.Errorf("EmailFrom %q should surface the original recipient", req.EmailFrom)
+	}
+	if !strings.Contains(req.EmailFrom, "alerts@grafana.local") {
+		t.Errorf("EmailFrom %q should retain the original sender", req.EmailFrom)
+	}
+}
+
 // --- AUTH ------------------------------------------------------------------
 
 // authPlain runs the PLAIN SASL exchange (single-shot, initial-response).

@@ -408,6 +408,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			TLSEnabled:      a.cfg.SMTP.TLSEnabled,
 			DataDir:         a.cfg.DataDir,
 			TrustedNetworks: a.cfg.SMTP.TrustedNetworks,
+			CatchAll:        a.cfg.SMTP.CatchAll,
 		}, a.aclStore, a.notifyServer)
 		if err != nil {
 			logging.Warn("Warning: SMTP gateway failed to start: %v", err)

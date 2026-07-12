@@ -14,6 +14,7 @@ import (
 	"github.com/jhillyerd/enmime/v2"
 
 	"github.com/atreoLABS/atreoAGENT/internal/atreolink"
+	"github.com/atreoLABS/atreoAGENT/internal/logging"
 	"github.com/atreoLABS/atreoAGENT/internal/notify"
 )
 
@@ -23,6 +24,10 @@ type session struct {
 	authed    bool
 	from      string
 	recipient *atreolink.MemberACLEntry
+	// Set when the recipient was resolved via the catch-all fallback, so Data
+	// can surface the address the sender actually used.
+	rcptTo   string
+	catchAll bool
 }
 
 // Must be advertised in EHLO; otherwise clients skip the AUTH exchange.
@@ -78,6 +83,19 @@ func (s *session) Rcpt(to string, opts *gosmtp.RcptOptions) error {
 		s.recipient = member
 		return nil
 	}
+	// Catch-all fallback: unmatched mail routes to a configured member instead
+	// of bouncing. The target must itself be a member — a push can only be
+	// sealed to a member's identity key — so a misconfigured catch-all is
+	// surfaced rather than silently swallowing mail.
+	if catchAll := s.server.cfg.CatchAll; catchAll != "" {
+		if member := s.server.acl.LookupByEmail(catchAll); member != nil {
+			s.recipient = member
+			s.rcptTo = to
+			s.catchAll = true
+			return nil
+		}
+		logging.Warn("smtp: catch_all %q does not match any member; rejecting unknown recipient", catchAll)
+	}
 	return &gosmtp.SMTPError{Code: 550, EnhancedCode: gosmtp.EnhancedCode{5, 1, 1}, Message: "unknown recipient"}
 }
 
@@ -113,6 +131,11 @@ func (s *session) Data(r io.Reader) error {
 	emailFrom := strings.TrimSpace(env.GetHeader("From"))
 	if emailFrom == "" {
 		emailFrom = s.from
+	}
+	// Catch-all mail wasn't addressed to this member, so fold the original
+	// recipient into the "From" line the client already renders.
+	if s.catchAll {
+		emailFrom = fmt.Sprintf("%s → %s", emailFrom, s.rcptTo)
 	}
 
 	preview := plaintextBody
@@ -151,6 +174,8 @@ func (s *session) Data(r io.Reader) error {
 func (s *session) Reset() {
 	s.from = ""
 	s.recipient = nil
+	s.rcptTo = ""
+	s.catchAll = false
 }
 
 func (s *session) Logout() error { return nil }

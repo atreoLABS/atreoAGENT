@@ -93,6 +93,7 @@ type Config struct {
 	TLSEnabled      bool // self-signed STARTTLS cert under DataDir
 	DataDir         string
 	TrustedNetworks []string // source-IP allowlist; empty = allow any (caller supplies the LAN default)
+	CatchAll        string   // unmatched RCPT falls back to this member's email; empty = reject unknown
 }
 
 // notifySender — interface so tests can stub.

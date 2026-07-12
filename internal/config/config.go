@@ -59,6 +59,7 @@ type SMTPConfig struct {
 	RatePerMinute   int      `yaml:"rate_per_minute"`   // default: 50 per source IP
 	TLSEnabled      bool     `yaml:"tls_enabled"`       // self-signed; clients must skip cert verification
 	TrustedNetworks []string `yaml:"trusted_networks"`  // default: loopback + RFC1918 + WG subnet
+	CatchAll        string   `yaml:"catch_all"`         // unmatched RCPT → this member's email; empty = reject (default)
 }
 
 type NotifyConfig struct {
@@ -336,6 +337,9 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("SMTP_LISTEN"); v != "" {
 		cfg.SMTP.Listen = v
+	}
+	if v := os.Getenv("SMTP_CATCH_ALL"); v != "" {
+		cfg.SMTP.CatchAll = v
 	}
 	if v := os.Getenv("SMTP_MAX_MESSAGE_BYTES"); v != "" {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil {

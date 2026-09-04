@@ -9,7 +9,7 @@ require (
 	github.com/emersion/go-smtp v0.25.0
 	github.com/go-acme/lego/v4 v4.35.2
 	github.com/huin/goupnp v1.3.0
-	github.com/jackpal/go-nat-pmp v1.0.2
+	github.com/jackpal/go-nat-pmp v1.1.0
 	github.com/jhillyerd/enmime/v2 v2.4.1
 	golang.org/x/crypto v0.55.0
 	golang.org/x/sys v0.47.0

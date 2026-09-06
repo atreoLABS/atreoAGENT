@@ -1,4 +1,4 @@
-FROM golang:1.26-alpine AS build
+FROM golang:1.27-alpine AS build
 # git lets `go build` embed the VCS stamp (commit + time + dirty) so an
 # image built with no build-args still self-identifies by commit.
 RUN apk add --no-cache git

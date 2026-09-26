@@ -76,7 +76,8 @@ gofmt -s -w .
 | `internal/canonjson/` | RFC 8785-restricted canonical JSON. Must produce byte-identical output to the canonicalisers used by every client and the coordination service. |
 | `internal/crypto/keys.go` | Ed25519 identity, Curve25519 WG, X25519 push key derivation, AES-GCM, libsodium sealed-box. |
 | `internal/wireguard/server.go` | `wg`/`ip` CLI wrapper. |
-| `internal/wireguard/ip_allocator.go` | 100.64.0.0/24 allocator, persistent. |
+| `internal/overlay/overlay.go` | Derives and persists this install's overlay `/24` (from `100.64.0.0/10`) and paired IPv6 `/64` at first boot. Must stay stable across restarts. |
+| `internal/wireguard/ip_allocator.go` | Allocator for this install's overlay `/24`, persistent. |
 | `internal/firewall/firewall.go` | iptables rules confining peers to the proxy ports. Without this, `network_mode: host` exposes every 0.0.0.0-bound service on the server to every paired peer. |
 | `internal/proxy/server.go` | ACL-enforcing reverse proxy, SNI dispatch across registered cert suffixes. |
 | `internal/proxy/auth.go` | Forward-auth endpoint for external proxies (Caddy / Traefik / nginx). |
@@ -106,6 +107,7 @@ gofmt -s -w .
 ### Touching WG peer management
 - `wg set` is the only path. Don't modify config files directly.
 - IP allocator state must stay in sync with kernel state. Load from JSON on startup, call `wg set` for each known peer.
+- On startup, peers with tunnel IPs outside the current overlay `/24` are reallocated.
 - Peer removal: always release the IP allocator entry AND call `wg set peer <pubkey> remove` AND delete the route.
 
 ### Touching push encryption
@@ -128,6 +130,8 @@ gofmt -s -w .
 - Don't bypass `member.IdentityPublic` for signature verification. Agent pins; atreolink relays.
 - Don't increase the 25 s keepalive interval. NAT timeouts aren't fun to debug.
 - Don't change the WG interface name (`wg-atreo`). Hardcoded in multiple places.
+- Don't hardcode `100.64.0.1`, `100.64.0.0/24`, `fd00:64::1`, or `fd00:64::/64`. Overlay addressing is per-install; take it from `Agent.overlay`. The legacy gateways stay bound only as aliases.
+- Don't treat `100.64.0.0/10` as "the tunnel". It is real CGNAT space; classify against this install's exact `/24` and `/64`.
 - Don't auto-update DDNS on port mismatch.
 - Don't skip atomic writes for JSON persistence — half-written files on crash are painful.
 - Don't widen `trusted_networks` defaults. LAN bypass is an explicit opt-in.
@@ -161,6 +165,7 @@ The repo is Apache-2.0 open source; future contributors (and future AI assistant
 - Endpoint envelope: `internal/endpoints/service.go`.
 - Cert automation: `internal/certs/manager.go`.
 - Custom-domain handlers: `internal/tunnel/handler_customdomain.go`.
+- Overlay re-roll: `cmd/atreoagent/reroll.go`.
 - UPnP: `internal/upnp/`.
 - Pairing / atreolink client: `internal/atreolink/client.go`.
 

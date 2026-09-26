@@ -18,6 +18,7 @@ import (
 	"github.com/atreoLABS/atreoAGENT/internal/acl"
 	"github.com/atreoLABS/atreoAGENT/internal/atreolink"
 	"github.com/atreoLABS/atreoAGENT/internal/certs"
+	"github.com/atreoLABS/atreoAGENT/internal/config"
 )
 
 func TestExtractSlug(t *testing.T) {
@@ -105,7 +106,8 @@ func proxyTestSetup(t *testing.T) (*Server, *httptest.Server, *acl.Store) {
 	store.SetAppDefinitions(allApps)
 
 	reg := newTestRegistry(t, "mynas.atreo.link")
-	srv := NewServer(store, ":0", "", reg, []string{"127.0.0.0/8"}, "https://app.atreolink.com")
+	srv := NewServer(store, ":0", "", reg, []string{"127.0.0.0/8"}, "https://app.atreolink.com",
+		[]string{config.OverlayLegacySubnetV4, config.OverlayLegacySubnetV6}, config.OverlayLegacyGatewayV4, config.OverlayLegacyGatewayV6)
 	return srv, backend, store
 }
 
@@ -160,7 +162,8 @@ func TestServeHTTP_AtreolinkSubdomain_NoOriginConfigured(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	reg := newTestRegistry(t, "mynas.atreo.link")
-	srv := NewServer(store, ":0", "", reg, nil, "")
+	srv := NewServer(store, ":0", "", reg, nil, "",
+		[]string{config.OverlayLegacySubnetV4, config.OverlayLegacySubnetV6}, config.OverlayLegacyGatewayV4, config.OverlayLegacyGatewayV6)
 	r := mkRequest("GET", "atreolink.mynas.atreo.link", "/", "10.0.0.1:1234")
 	w := httptest.NewRecorder()
 	srv.ServeHTTP(w, r)
@@ -284,7 +287,8 @@ func TestServeHTTP_ForwardedHeaders(t *testing.T) {
 	store.SetAppDefinitions([]atreolink.App{app})
 	reg := newTestRegistry(t, "mynas.atreo.link")
 	// Trusted network so the request reaches the backend without ACL setup.
-	srv := NewServer(store, ":0", "", reg, []string{"127.0.0.0/8"}, "")
+	srv := NewServer(store, ":0", "", reg, []string{"127.0.0.0/8"}, "",
+		[]string{config.OverlayLegacySubnetV4, config.OverlayLegacySubnetV6}, config.OverlayLegacyGatewayV4, config.OverlayLegacyGatewayV6)
 
 	t.Run("plain http", func(t *testing.T) {
 		r := mkRequest("GET", "nextcloud.mynas.atreo.link", "/", "127.0.0.1:5555")
@@ -325,7 +329,8 @@ func TestServeHTTP_BadGatewayOnInvalidURL(t *testing.T) {
 	}
 	store.SetAppDefinitions([]atreolink.App{bad})
 	reg := newTestRegistry(t, "mynas.atreo.link")
-	srv := NewServer(store, ":0", "", reg, nil, "")
+	srv := NewServer(store, ":0", "", reg, nil, "",
+		[]string{config.OverlayLegacySubnetV4, config.OverlayLegacySubnetV6}, config.OverlayLegacyGatewayV4, config.OverlayLegacyGatewayV6)
 	r := mkRequest("GET", "x.mynas.atreo.link", "/", "100.64.0.30:5555")
 	w := httptest.NewRecorder()
 	srv.ServeHTTP(w, r)
@@ -392,7 +397,8 @@ func TestServeHTTP_ErrorPage_NoInternalLeakage(t *testing.T) {
 	}
 	store.SetAppDefinitions([]atreolink.App{app})
 	reg := newTestRegistry(t, "mynas.atreo.link")
-	srv := NewServer(store, ":0", "", reg, []string{"127.0.0.0/8"}, "")
+	srv := NewServer(store, ":0", "", reg, []string{"127.0.0.0/8"}, "",
+		[]string{config.OverlayLegacySubnetV4, config.OverlayLegacySubnetV6}, config.OverlayLegacyGatewayV4, config.OverlayLegacyGatewayV6)
 
 	r := mkRequest("GET", "x.mynas.atreo.link", "/", "127.0.0.1:5555")
 	r.Header.Set("Accept", browserAccept)
@@ -425,7 +431,8 @@ func TestServeHTTP_ErrorPage_InvalidURLNoLeak(t *testing.T) {
 	}
 	store.SetAppDefinitions([]atreolink.App{bad})
 	reg := newTestRegistry(t, "mynas.atreo.link")
-	srv := NewServer(store, ":0", "", reg, nil, "")
+	srv := NewServer(store, ":0", "", reg, nil, "",
+		[]string{config.OverlayLegacySubnetV4, config.OverlayLegacySubnetV6}, config.OverlayLegacyGatewayV4, config.OverlayLegacyGatewayV6)
 
 	r := mkRequest("GET", "x.mynas.atreo.link", "/", "100.64.0.30:5555")
 	r.Header.Set("Accept", browserAccept)
@@ -493,7 +500,8 @@ func TestServeHTTP_POSTSurvivesConnectionClosingBackend(t *testing.T) {
 	}
 	store.SetAppDefinitions([]atreolink.App{app})
 	reg := newTestRegistry(t, "mynas.atreo.link")
-	srv := NewServer(store, ":0", "", reg, []string{"127.0.0.0/8"}, "")
+	srv := NewServer(store, ":0", "", reg, []string{"127.0.0.0/8"}, "",
+		[]string{config.OverlayLegacySubnetV4, config.OverlayLegacySubnetV6}, config.OverlayLegacyGatewayV4, config.OverlayLegacyGatewayV6)
 
 	steps := []struct{ method, body string }{
 		{"GET", ""},
@@ -782,4 +790,18 @@ func TestServeHTTP_RealConnLocalAddr(t *testing.T) {
 			t.Errorf("body=%v, want via=lan host=%s", body, wantHost)
 		}
 	})
+}
+
+func TestOverlayClassificationUsesInjectedNets(t *testing.T) {
+	s := NewServer(nil, ":443", ":80", nil, nil, "",
+		[]string{"100.70.5.0/24", "100.64.0.0/24", "fd00:64::/64"}, "100.70.5.1", "fd00:64::1")
+	if !IsTrusted("100.70.5.9", s.overlayNets) {
+		t.Error("derived overlay source not classified as tunnel")
+	}
+	if !IsTrusted("100.64.0.9", s.overlayNets) {
+		t.Error("legacy overlay source not classified as tunnel")
+	}
+	if IsTrusted("100.80.1.9", s.overlayNets) {
+		t.Error("an unrelated CGNAT address was classified as tunnel — the /10 must not be trusted wholesale")
+	}
 }

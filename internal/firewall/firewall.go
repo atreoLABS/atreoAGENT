@@ -20,10 +20,11 @@ const (
 	forwardChain = "ATREOAGENT-WG-FORWARD"
 )
 
-// The overlay is dual-stack (100.64.0.0/24 + fd00:64::/64) on one wg interface,
-// so v6 peer traffic must be confined identically — otherwise network_mode:host
-// exposes every ::-bound host service to peers. Each table is driven through the
-// same ruleset; only the binary and the ICMP proto name differ.
+// The overlay is dual-stack (this install's own /24 plus its own /64) on one
+// wg interface, so v6 peer traffic must be confined identically — otherwise
+// network_mode:host exposes every ::-bound host service to peers. Each table
+// is driven through the same ruleset; only the binary and the ICMP proto name
+// differ.
 type fwTable struct {
 	bin       string
 	icmpProto string

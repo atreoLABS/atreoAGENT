@@ -16,6 +16,7 @@ import (
 	"golang.org/x/crypto/curve25519"
 
 	"github.com/atreoLABS/atreoAGENT/internal/atomic"
+	"github.com/atreoLABS/atreoAGENT/internal/overlay"
 )
 
 // Leading `-` is rejected to defeat flag injection into `wg`.
@@ -219,6 +220,14 @@ func (s *Server) Start(ctx context.Context) error {
 		return fmt.Errorf("assign IP: %w", err)
 	}
 
+	// Keep the legacy gateway bound for existing operator configs.
+	if s.serverIP != overlay.LegacyGatewayV4 {
+		legacy := overlay.LegacyGatewayV4 + "/24"
+		if err := run(ctx, "ip", "addr", "add", legacy, "dev", s.iface); err != nil {
+			logging.Warn("WireGuard: legacy alias %s not bound — configs pointing at it will not resolve: %v", legacy, err)
+		}
+	}
+
 	// Dual-stack overlay: app hostnames also carry an AAAA to this ULA so
 	// IPv6-only / DNS64 clients aren't NAT64-synthesised off the IPv4 route.
 	// Non-fatal — a host with IPv6 disabled keeps running the v4 overlay.
@@ -226,6 +235,14 @@ func (s *Server) Start(ctx context.Context) error {
 		v6addr := fmt.Sprintf("%s/%d", s.serverIPv6, v6PrefixLen(s.subnetV6))
 		if err := run(ctx, "ip", "addr", "add", v6addr, "dev", s.iface); err != nil {
 			logging.Warn("WireGuard: assign IPv6 %s failed — v6 overlay disabled on this host: %v", v6addr, err)
+		}
+
+		// Same for the legacy v6 gateway.
+		if s.serverIPv6 != overlay.LegacyGatewayV6 {
+			legacyV6 := overlay.LegacyGatewayV6 + "/64"
+			if err := run(ctx, "ip", "addr", "add", legacyV6, "dev", s.iface); err != nil {
+				logging.Warn("WireGuard: legacy v6 alias %s not bound — configs pointing at it will not resolve: %v", legacyV6, err)
+			}
 		}
 	}
 
@@ -319,7 +336,7 @@ func (s *Server) AddPeer(pubKey, tunnelIP string) error {
 	}
 
 	s.peers[pubKey] = Peer{PublicKey: pubKey, TunnelIP: tunnelIP, TunnelIPv6: tunnelIPv6}
-	logging.Info("WireGuard: added peer %s with IP %s (%d total)", truncateKey(pubKey), tunnelIP, len(s.peers))
+	logging.Info("WireGuard: added peer %s with IP %s (%d total)", TruncateKey(pubKey), tunnelIP, len(s.peers))
 	return nil
 }
 
@@ -333,7 +350,7 @@ func (s *Server) RemovePeer(pubKey string) error {
 	}
 
 	if err := run(context.Background(), "wg", "set", s.iface, "peer", pubKey, "remove"); err != nil {
-		logging.Warn("WireGuard: peer remove %s failed: %v", truncateKey(pubKey), err)
+		logging.Warn("WireGuard: peer remove %s failed: %v", TruncateKey(pubKey), err)
 	}
 	if err := run(context.Background(), "ip", "route", "del", peer.TunnelIP+"/32", "dev", s.iface); err != nil {
 		logging.Error("WireGuard: route del %s failed (may already be gone): %v", peer.TunnelIP, err)
@@ -345,7 +362,7 @@ func (s *Server) RemovePeer(pubKey string) error {
 	}
 
 	delete(s.peers, pubKey)
-	logging.Info("WireGuard: removed peer %s (%d remaining)", truncateKey(pubKey), len(s.peers))
+	logging.Info("WireGuard: removed peer %s (%d remaining)", TruncateKey(pubKey), len(s.peers))
 	return nil
 }
 
@@ -375,7 +392,8 @@ func run(ctx context.Context, name string, args ...string) error {
 	return nil
 }
 
-func truncateKey(key string) string {
+// TruncateKey shortens a WG pubkey for logs.
+func TruncateKey(key string) string {
 	if len(key) > 16 {
 		return key[:16] + "..."
 	}

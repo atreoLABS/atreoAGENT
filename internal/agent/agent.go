@@ -23,6 +23,7 @@ import (
 	"github.com/atreoLABS/atreoAGENT/internal/endpoints"
 	"github.com/atreoLABS/atreoAGENT/internal/firewall"
 	"github.com/atreoLABS/atreoAGENT/internal/notify"
+	"github.com/atreoLABS/atreoAGENT/internal/overlay"
 	"github.com/atreoLABS/atreoAGENT/internal/probe"
 	"github.com/atreoLABS/atreoAGENT/internal/proxy"
 	"github.com/atreoLABS/atreoAGENT/internal/relay"
@@ -48,6 +49,7 @@ type Agent struct {
 	notifyServer      *notify.Server
 	customDomainStore *store.CustomDomainStore
 	firewall          *firewall.Manager
+	overlay           overlay.Overlay
 
 	// Dedupe v6-pinhole failure logging: a gateway that supports neither PCP
 	// nor IGDv2 v6 firewall control fails every tick, so log at INFO only when
@@ -63,9 +65,14 @@ func New(cfg *config.Config) (*Agent, error) {
 		return nil, fmt.Errorf("init keys: %w", err)
 	}
 
+	ov, err := overlay.LoadOrCreate(cfg.OverlayPath())
+	if err != nil {
+		return nil, fmt.Errorf("init overlay addressing: %w", err)
+	}
+
 	allocator, err := wireguard.NewIPAllocator(
-		config.OverlaySubnetV4,
-		config.OverlayServerIPv4,
+		ov.SubnetV4,
+		ov.GatewayV4,
 		cfg.IPAllocPath(),
 	)
 	if err != nil {
@@ -74,10 +81,10 @@ func New(cfg *config.Config) (*Agent, error) {
 
 	wgServer, err := wireguard.NewServer(
 		cfg.WireGuard.ListenPort,
-		config.OverlayServerIPv4,
-		config.OverlaySubnetV4,
-		config.OverlayServerIPv6,
-		config.OverlaySubnetV6,
+		ov.GatewayV4,
+		ov.SubnetV4,
+		ov.GatewayV6,
+		ov.SubnetV6,
 		cfg.KeysDir(),
 		allocator,
 	)
@@ -117,6 +124,7 @@ func New(cfg *config.Config) (*Agent, error) {
 		upnp:              upnpClient,
 		certs:             certsMgr,
 		customDomainStore: customDomainStore,
+		overlay:           ov,
 	}, nil
 }
 
@@ -219,6 +227,9 @@ func (a *Agent) Run(ctx context.Context) error {
 	if err := a.wgServer.Start(ctx); err != nil {
 		return fmt.Errorf("start WireGuard: %w", err)
 	}
+	logging.Info("Overlay: this server is %s on %s (also answering on %s), and %s on %s (also answering on %s)",
+		a.overlay.GatewayV4, a.overlay.SubnetV4, config.OverlayLegacyGatewayV4,
+		a.overlay.GatewayV6, a.overlay.SubnetV6, config.OverlayLegacyGatewayV6)
 
 	// Without the firewall, anything bound to 0.0.0.0 is reachable to
 	// every paired peer, bypassing the proxy ACL. Fail closed: abort
@@ -319,14 +330,21 @@ func (a *Agent) Run(ctx context.Context) error {
 	// interfaces so LAN clients can reach the proxy via the
 	// trusted_networks bypass; every request is gated on TCP peer IP (ACL
 	// for tunnel peers, IsTrusted for LAN) and fails closed for unknown IPs.
+	// The legacy /24 is excluded: no peer can source from it after
+	// reconcilePeers, and a LAN host with an ISP-assigned CGNAT address
+	// inside it must not be classified as tunnel traffic.
+	overlayCIDRs := []string{a.overlay.SubnetV4, a.overlay.SubnetV6}
 	if a.cfg.Proxy.Enabled != nil && *a.cfg.Proxy.Enabled {
 		httpsListen := fmt.Sprintf(":%d", a.cfg.Proxy.HTTPSPort)
 		httpListen := fmt.Sprintf(":%d", a.cfg.Proxy.HTTPPort)
 		a.proxy = proxy.NewServer(
 			a.aclStore, httpsListen, httpListen,
 			a.certs.Registry,
-			a.cfg.Proxy.TrustedNetworks,
+			overlay.ExpandLegacy(a.cfg.Proxy.TrustedNetworks, a.overlay.SubnetV4),
 			a.cfg.AtreoLinkAppURL,
+			overlayCIDRs,
+			a.overlay.GatewayV4,
+			a.overlay.GatewayV6,
 		)
 		go func() {
 			if err := a.proxy.Start(ctx); err != nil {
@@ -335,17 +353,29 @@ func (a *Agent) Run(ctx context.Context) error {
 		}()
 	} else {
 		logging.Info("Built-in proxy disabled. Use your own reverse proxy to serve apps on the WireGuard interface.")
-		logging.Info("Forward-auth endpoint available at %s:%d/auth", config.OverlayServerIPv4, a.cfg.Proxy.AuthPort)
+		logging.Info("Forward-auth endpoint available at %s:%d/auth (also on %s:%d)",
+			a.overlay.GatewayV4, a.cfg.Proxy.AuthPort, config.OverlayLegacyGatewayV4, a.cfg.Proxy.AuthPort)
 	}
 
 	// Forward-auth always runs — external reverse proxies depend on it.
-	authListen := fmt.Sprintf("%s:%d", config.OverlayServerIPv4, a.cfg.Proxy.AuthPort)
-	authServer := proxy.NewAuthServer(a.aclStore, authListen, a.certs.Registry, a.cfg.Proxy.TrustedNetworks, a.cfg.Proxy.TrustedProxies)
-	go func() {
-		if err := authServer.Start(ctx); err != nil {
-			logging.Error("Auth server error: %v", err)
-		}
-	}()
+	// Existing proxy configs point at the legacy gateway, so bind that too.
+	authAddrs := []string{a.overlay.GatewayV4}
+	if a.overlay.GatewayV4 != config.OverlayLegacyGatewayV4 {
+		authAddrs = append(authAddrs, config.OverlayLegacyGatewayV4)
+	}
+	for _, addr := range authAddrs {
+		listen := fmt.Sprintf("%s:%d", addr, a.cfg.Proxy.AuthPort)
+		authServer := proxy.NewAuthServer(
+			a.aclStore, listen, a.certs.Registry,
+			overlay.ExpandLegacy(a.cfg.Proxy.TrustedNetworks, a.overlay.SubnetV4),
+			overlay.ExpandLegacy(a.cfg.Proxy.TrustedProxies, a.overlay.SubnetV4),
+		)
+		go func(listen string) {
+			if err := authServer.Start(ctx); err != nil {
+				logging.Error("Auth server on %s error: %v", listen, err)
+			}
+		}(listen)
+	}
 
 	notifySrv, err := notify.NewServer(a.cfg.Notify.Port, a.cfg.DataDir, a.cfg.DeviceID, a.atreolink, a.aclStore)
 	if err != nil {
@@ -407,7 +437,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			RatePerMinute:   a.cfg.SMTP.RatePerMinute,
 			TLSEnabled:      a.cfg.SMTP.TLSEnabled,
 			DataDir:         a.cfg.DataDir,
-			TrustedNetworks: a.cfg.SMTP.TrustedNetworks,
+			TrustedNetworks: overlay.ExpandLegacy(a.cfg.SMTP.TrustedNetworks, a.overlay.SubnetV4),
 			CatchAll:        a.cfg.SMTP.CatchAll,
 		}, a.aclStore, a.notifyServer)
 		if err != nil {
@@ -422,6 +452,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 
 	a.tunnel = tunnel.NewClient(a.atreolink, a.cfg.AtreoLinkAPIURL, a.keyManager, a.cfg.DeviceID)
+
 	handlers := tunnel.NewHandlers(
 		a.wgServer, a.aclStore, a.keyManager, a.allocator,
 		a.cfg.PairingPath(), a.cfg.DeviceID, a.cfg.TunnelHost,
@@ -537,11 +568,12 @@ func (a *Agent) Run(ctx context.Context) error {
 		// Tunnel is now attached: nudge the relay client so it requests a grant
 		// straight away (if it needs one) rather than waiting out its retry timer.
 		relayMgr.Wake()
-		payload, _ := json.Marshal(map[string]int{
-			"proxyHttpsPort": a.cfg.Proxy.HTTPSPort,
-		})
-		msgs := []atreolink.TunnelMessage{
-			{Type: "device:metadata", Payload: payload},
+		var msgs []atreolink.TunnelMessage
+		payload, err := json.Marshal(metadataPayload(a.cfg.Proxy.HTTPSPort, a.overlay))
+		if err != nil {
+			logging.Error("device:metadata: marshal failed, skipping: %v", err)
+		} else {
+			msgs = append(msgs, atreolink.TunnelMessage{Type: "device:metadata", Payload: payload})
 		}
 		if env, ok := endpointsSvc.CurrentMessage(); ok {
 			msgs = append(msgs, env)
@@ -751,6 +783,18 @@ func (a *Agent) Run(ctx context.Context) error {
 				portMismatchNotified = false
 			}
 		}
+	}
+}
+
+// metadataPayload is reported on every WS attach, so a re-rolled subnet
+// propagates without a separate message. The field names are wire protocol.
+func metadataPayload(proxyHTTPSPort int, ov overlay.Overlay) map[string]any {
+	return map[string]any{
+		"proxyHttpsPort":     proxyHTTPSPort,
+		"overlayGatewayIpv4": ov.GatewayV4,
+		"overlaySubnetIpv4":  ov.SubnetV4,
+		"overlayGatewayIpv6": ov.GatewayV6,
+		"overlaySubnetIpv6":  ov.SubnetV6,
 	}
 }
 
@@ -1020,8 +1064,9 @@ func (a *Agent) clearDirectWarnMarker() {
 }
 
 // reconcilePeers re-aligns WireGuard peers with the ACL on startup.
-// Suspended members are excluded from the add phase; their ACL state
-// (and allocator slot) is preserved for the next member:status active.
+// Suspended members are excluded from the add phase; their ACL record is
+// preserved for the next member:status active. A peer whose TunnelIP is
+// outside the current subnet is reallocated.
 func (a *Agent) reconcilePeers() {
 	members := a.aclStore.AllMembers()
 
@@ -1047,13 +1092,23 @@ func (a *Agent) reconcilePeers() {
 			}
 			validKeys[c.WGPublicKey] = true
 			tunnelIP := c.TunnelIP
-			if tunnelIP == "" {
+			renumbered := tunnelIP == "" || !a.allocator.InSubnet(tunnelIP)
+			if renumbered {
 				ip, err := a.allocator.Allocate(c.WGPublicKey)
 				if err != nil {
 					logging.Warn("Warning: failed to allocate IP for peer %s: %v", c.WGPublicKey[:16], err)
 					continue
 				}
+				if tunnelIP != "" {
+					logging.Info("Renumbered peer %s: %s -> %s (outside current overlay subnet)", wireguard.TruncateKey(c.WGPublicKey), tunnelIP, ip)
+				}
 				tunnelIP = ip
+			}
+			newTunnelIPv6 := a.wgServer.TunnelIPv6(tunnelIP)
+			// After a v6 migration the IPv4 address can stay valid while the
+			// IPv6 one moves; the client won't route v6 until it re-provisions.
+			if !renumbered && c.TunnelIPv6 != "" && c.TunnelIPv6 != newTunnelIPv6 {
+				logging.Info("Peer %s v6 address changed: %s -> %s (client must re-provision for v6)", wireguard.TruncateKey(c.WGPublicKey), c.TunnelIPv6, newTunnelIPv6)
 			}
 			if err := a.wgServer.AddPeer(c.WGPublicKey, tunnelIP); err != nil {
 				logging.Warn("Warning: failed to add peer %s: %v", c.WGPublicKey[:16], err)
@@ -1062,7 +1117,7 @@ func (a *Agent) reconcilePeers() {
 			a.aclStore.AddClient(member.MemberID, atreolink.ClientRecord{
 				WGPublicKey: c.WGPublicKey,
 				TunnelIP:    tunnelIP,
-				TunnelIPv6:  a.wgServer.TunnelIPv6(tunnelIP),
+				TunnelIPv6:  newTunnelIPv6,
 				Label:       c.Label,
 				Platform:    c.Platform,
 			})

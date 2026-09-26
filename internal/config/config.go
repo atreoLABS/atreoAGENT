@@ -13,6 +13,7 @@ import (
 
 	"github.com/atreoLABS/atreoAGENT/internal/atomic"
 	"github.com/atreoLABS/atreoAGENT/internal/logging"
+	"github.com/atreoLABS/atreoAGENT/internal/overlay"
 )
 
 type Config struct {
@@ -66,17 +67,14 @@ type NotifyConfig struct {
 	Port int `yaml:"port"` // default: 9876
 }
 
-// FirewallEnabled is *bool so an explicit `false` in YAML survives the
-// default. Disabling exposes every host port to every paired peer.
-// Overlay addressing is fixed, NOT operator-configurable. Every agent uses the
-// same gateway IPs so a single shared DNS record — the CNAME target every
-// custom domain points at — resolves to them universally. Changing them per
-// agent would break that shared record, so the knobs were removed deliberately.
+// Overlay addressing is per-install (see internal/overlay). These are the
+// fixed addresses every install used before; both gateways stay bound as
+// aliases so existing operator configs keep working.
 const (
-	OverlayServerIPv4 = "100.64.0.1"
-	OverlaySubnetV4   = "100.64.0.0/24"
-	OverlayServerIPv6 = "fd00:64::1"
-	OverlaySubnetV6   = "fd00:64::/64"
+	OverlayLegacyGatewayV4 = overlay.LegacyGatewayV4
+	OverlayLegacySubnetV4  = overlay.LegacySubnetV4
+	OverlayLegacyGatewayV6 = overlay.LegacyGatewayV6
+	OverlayLegacySubnetV6  = overlay.LegacySubnetV6
 )
 
 // IPv6PinholeEnabled is *bool so an explicit `false` in YAML survives the
@@ -219,7 +217,7 @@ func applyDefaults(cfg *Config) {
 			"127.0.0.0/8", "::1/128",
 			"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
 			"169.254.0.0/16", "fe80::/10", "fc00::/7",
-			OverlaySubnetV4,
+			OverlayLegacySubnetV4,
 		}
 	}
 	if cfg.Proxy.Enabled == nil {
@@ -439,6 +437,10 @@ func (c *Config) ACLPath() string {
 
 func (c *Config) IPAllocPath() string {
 	return filepath.Join(c.DataDir, "ip_alloc.json")
+}
+
+func (c *Config) OverlayPath() string {
+	return filepath.Join(c.DataDir, "overlay.json")
 }
 
 func (c *Config) CertsDir() string {

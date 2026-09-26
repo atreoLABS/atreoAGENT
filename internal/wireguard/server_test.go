@@ -24,20 +24,22 @@ func newTestServer(t *testing.T) (*Server, string) {
 
 func TestDeriveTunnelIPv6(t *testing.T) {
 	cases := []struct {
-		v4, want string
+		serverV6, v4, want string
 	}{
-		{"100.64.0.1", "fd00:64::1"},   // server
-		{"100.64.0.2", "fd00:64::2"},   // first client
-		{"100.64.0.42", "fd00:64::2a"}, // host octet 42 == 0x2a
-		{"100.64.0.254", "fd00:64::fe"},
+		{"fd00:64::1", "100.64.0.1", "fd00:64::1"},   // server, legacy prefix
+		{"fd00:64::1", "100.64.0.2", "fd00:64::2"},   // first client
+		{"fd00:64::1", "100.64.0.42", "fd00:64::2a"}, // host octet 42 == 0x2a
+		{"fd00:64::1", "100.64.0.254", "fd00:64::fe"},
+		// Non-zero middle groups catch an implementation that ignores the prefix.
+		{"fd00:64:6:5::1", "100.70.5.42", "fd00:64:6:5::2a"},
 	}
 	for _, c := range cases {
-		got, err := deriveTunnelIPv6("fd00:64::1", c.v4)
+		got, err := deriveTunnelIPv6(c.serverV6, c.v4)
 		if err != nil {
-			t.Fatalf("deriveTunnelIPv6(%q): %v", c.v4, err)
+			t.Fatalf("deriveTunnelIPv6(%q, %q): %v", c.serverV6, c.v4, err)
 		}
 		if got != c.want {
-			t.Errorf("deriveTunnelIPv6(%q) = %q, want %q", c.v4, got, c.want)
+			t.Errorf("deriveTunnelIPv6(%q, %q) = %q, want %q", c.serverV6, c.v4, got, c.want)
 		}
 	}
 	if _, err := deriveTunnelIPv6("fd00:64::1", "not-an-ip"); err == nil {
@@ -295,11 +297,23 @@ func TestAddPeer_RejectsMalformedTunnelIP(t *testing.T) {
 }
 
 func TestTruncateKey(t *testing.T) {
-	if got := truncateKey("short"); got != "short" {
-		t.Errorf("truncateKey(short)=%q", got)
+	if got := TruncateKey("short"); got != "short" {
+		t.Errorf("TruncateKey(short)=%q", got)
 	}
 	long := "0123456789abcdef0123456789"
-	if got := truncateKey(long); got != "0123456789abcdef..." {
-		t.Errorf("truncateKey long: %q", got)
+	if got := TruncateKey(long); got != "0123456789abcdef..." {
+		t.Errorf("TruncateKey long: %q", got)
+	}
+}
+
+func TestAllowedIPsUsesTheDerivedSubnet(t *testing.T) {
+	// A legacy range here would collide with every other server's route on
+	// a client peered with several.
+	srv, err := NewServer(51820, "100.70.5.1", "100.70.5.0/24", "fd00:64:6:5::1", "fd00:64:6:5::/64", t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := srv.AllowedIPs(); got != "100.70.5.0/24,fd00:64:6:5::/64" {
+		t.Errorf("AllowedIPs = %q, want 100.70.5.0/24,fd00:64:6:5::/64", got)
 	}
 }

@@ -17,7 +17,6 @@ import (
 	"github.com/atreoLABS/atreoAGENT/internal/acl"
 	"github.com/atreoLABS/atreoAGENT/internal/atreolink"
 	"github.com/atreoLABS/atreoAGENT/internal/certs"
-	"github.com/atreoLABS/atreoAGENT/internal/config"
 	"github.com/atreoLABS/atreoAGENT/internal/logging"
 )
 
@@ -42,26 +41,41 @@ func isReservedSlug(slug string) bool {
 const tlsMinVersion = tls.VersionTLS13
 
 type Server struct {
-	aclStore        *acl.Store
-	listen          string
-	httpListen      string
-	registry        *certs.Registry
-	trustedNetworks []*net.IPNet
-	overlayNets     []*net.IPNet
-	webOrigin       string
-	httpServer      *http.Server
-	transport       http.RoundTripper
+	aclStore         *acl.Store
+	listen           string
+	httpListen       string
+	registry         *certs.Registry
+	trustedNetworks  []*net.IPNet
+	overlayNets      []*net.IPNet
+	overlayGatewayV4 string
+	overlayGatewayV6 string
+	webOrigin        string
+	httpServer       *http.Server
+	transport        http.RoundTripper
 }
 
-func NewServer(aclStore *acl.Store, httpsListen, httpListen string, registry *certs.Registry, trustedCIDRs []string, webOrigin string) *Server {
+// overlayCIDRs must be the exact ranges this install answers on, never the
+// whole 100.64.0.0/10: an ISP router can hand a LAN host a CGNAT address.
+func NewServer(
+	aclStore *acl.Store,
+	httpsListen, httpListen string,
+	registry *certs.Registry,
+	trustedCIDRs []string,
+	webOrigin string,
+	overlayCIDRs []string,
+	overlayGatewayV4 string,
+	overlayGatewayV6 string,
+) *Server {
 	s := &Server{
-		aclStore:        aclStore,
-		listen:          httpsListen,
-		httpListen:      httpListen,
-		registry:        registry,
-		trustedNetworks: ParseTrustedNetworks(trustedCIDRs),
-		overlayNets:     ParseTrustedNetworks([]string{config.OverlaySubnetV4, config.OverlaySubnetV6}),
-		webOrigin:       webOrigin,
+		aclStore:         aclStore,
+		listen:           httpsListen,
+		httpListen:       httpListen,
+		registry:         registry,
+		trustedNetworks:  ParseTrustedNetworks(trustedCIDRs),
+		overlayNets:      ParseTrustedNetworks(overlayCIDRs),
+		overlayGatewayV4: overlayGatewayV4,
+		overlayGatewayV6: overlayGatewayV6,
+		webOrigin:        webOrigin,
 	}
 
 	// No upstream keep-alives: a POST that reuses a pooled conn the backend already closed can't be retried and 502s.
@@ -215,9 +229,9 @@ func (s *Server) redirectPortApp(w http.ResponseWriter, r *http.Request, app *at
 	host := localIP(r)
 	if host == "" {
 		// No conn info (shouldn't happen under net/http); use the peer family's overlay IP.
-		host = config.OverlayServerIPv4
+		host = s.overlayGatewayV4
 		if ip := net.ParseIP(sourceIP); ip != nil && ip.To4() == nil {
-			host = config.OverlayServerIPv6
+			host = s.overlayGatewayV6
 		}
 	}
 	target := url.URL{

@@ -8,7 +8,7 @@ import (
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Println("Usage: atreoagent <command>")
-		fmt.Println("Commands: run, pair, status, apps, version")
+		fmt.Println("Commands: run, pair, status, apps, reroll, version")
 		os.Exit(1)
 	}
 	switch os.Args[1] {
@@ -20,6 +20,8 @@ func main() {
 		runStatus(os.Args[2:])
 	case "apps":
 		runApps(os.Args[2:])
+	case "reroll":
+		runReroll(os.Args[2:])
 	case "version", "--version", "-v":
 		runVersion(os.Args[2:])
 	default:

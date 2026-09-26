@@ -22,15 +22,17 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.WireGuard.ListenPort != 51820 {
 		t.Errorf("WG ListenPort = %d, want %d", cfg.WireGuard.ListenPort, 51820)
 	}
-	// Overlay addressing is fixed (non-configurable) — assert the constants.
-	if OverlaySubnetV4 != "100.64.0.0/24" {
-		t.Errorf("OverlaySubnetV4 = %q, want %q", OverlaySubnetV4, "100.64.0.0/24")
+	if OverlayLegacySubnetV4 != "100.64.0.0/24" {
+		t.Errorf("OverlayLegacySubnetV4 = %q, want %q", OverlayLegacySubnetV4, "100.64.0.0/24")
 	}
-	if OverlayServerIPv4 != "100.64.0.1" {
-		t.Errorf("OverlayServerIPv4 = %q, want %q", OverlayServerIPv4, "100.64.0.1")
+	if OverlayLegacyGatewayV4 != "100.64.0.1" {
+		t.Errorf("OverlayLegacyGatewayV4 = %q, want %q", OverlayLegacyGatewayV4, "100.64.0.1")
 	}
-	if OverlayServerIPv6 != "fd00:64::1" {
-		t.Errorf("OverlayServerIPv6 = %q, want %q", OverlayServerIPv6, "fd00:64::1")
+	if OverlayLegacyGatewayV6 != "fd00:64::1" {
+		t.Errorf("OverlayLegacyGatewayV6 = %q, want %q", OverlayLegacyGatewayV6, "fd00:64::1")
+	}
+	if OverlayLegacySubnetV6 != "fd00:64::/64" {
+		t.Errorf("OverlayLegacySubnetV6 = %q, want %q", OverlayLegacySubnetV6, "fd00:64::/64")
 	}
 	if cfg.Proxy.HTTPSPort != 443 {
 		t.Errorf("Proxy HTTPSPort = %d, want %d", cfg.Proxy.HTTPSPort, 443)
@@ -257,6 +259,13 @@ func TestHelperPaths(t *testing.T) {
 	}
 	if cfg.CertsDir() != "/data/certs" {
 		t.Errorf("CertsDir = %q", cfg.CertsDir())
+	}
+}
+
+func TestOverlayPathSitsUnderDataDir(t *testing.T) {
+	cfg := &Config{DataDir: "/var/lib/atreoagent"}
+	if got := cfg.OverlayPath(); got != "/var/lib/atreoagent/overlay.json" {
+		t.Errorf("OverlayPath() = %q", got)
 	}
 }
 

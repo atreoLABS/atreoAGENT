@@ -96,12 +96,17 @@ func (a *IPAllocator) Allocate(clientPubKey string) (string, error) {
 // authoritative (atomically-persisted) ACL after a crash that lost the
 // allocator's own state file — without it, Save() runs only on clean
 // shutdown, so a SIGKILL/OOM leaves stale state and new allocations collide.
+// Ignores anything InSubnet rejects; the caller falls back to Allocate.
 func (a *IPAllocator) MarkUsed(clientPubKey, ip string) {
-	if ip == "" {
+	if !a.InSubnet(ip) {
 		return
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	// Do not override an address already held by another pubkey.
+	if a.usedIPs[ip] {
+		return
+	}
 	a.usedIPs[ip] = true
 	if clientPubKey != "" {
 		a.allocated[clientPubKey] = ip
@@ -109,20 +114,13 @@ func (a *IPAllocator) MarkUsed(clientPubKey, ip string) {
 }
 
 // TryAdopt records a tunnel IP for a not-yet-known pubkey, but only when it is
-// safe: a canonical IPv4 in this allocator's /24, not reserved, and not held
-// by another pubkey. Returns false otherwise so the caller falls back to
-// Allocate. Used to restore an IP from the agent's own signed lease; the
-// collision check refuses a stale lease whose IP was since reissued.
+// safe: InSubnet (canonical IPv4, in this allocator's /24, not reserved) and
+// not held by another pubkey. Returns false otherwise so the caller falls
+// back to Allocate. Used to restore an IP from the agent's own signed lease;
+// the collision check refuses a stale lease whose IP was since reissued.
 func (a *IPAllocator) TryAdopt(clientPubKey, ip string) bool {
-	if clientPubKey == "" || ip == "" {
+	if clientPubKey == "" || !a.InSubnet(ip) {
 		return false
-	}
-	parsed := net.ParseIP(ip)
-	if parsed == nil || parsed.To4() == nil || parsed.String() != ip {
-		return false // unparseable, IPv6, or non-canonical (e.g. leading zeros)
-	}
-	if !strings.HasPrefix(ip, a.prefix+".") {
-		return false // outside this allocator's subnet
 	}
 
 	a.mu.Lock()
@@ -162,11 +160,32 @@ func (a *IPAllocator) Lookup(clientPubKey string) string {
 	return a.allocated[clientPubKey]
 }
 
+// InSubnet reports whether ip is a canonical, non-reserved address in this
+// allocator's /24.
+func (a *IPAllocator) InSubnet(ip string) bool {
+	parsed := net.ParseIP(ip)
+	if parsed == nil || parsed.To4() == nil || parsed.String() != ip {
+		return false // unparseable, IPv6, or non-canonical (e.g. leading zeros)
+	}
+	if !strings.HasPrefix(ip, a.prefix+".") {
+		return false // outside this allocator's subnet
+	}
+	if ip == a.serverIP || ip == a.prefix+".0" || ip == a.prefix+".255" {
+		return false
+	}
+	return true
+}
+
 // Save persists the allocator state to disk.
 func (a *IPAllocator) Save() error {
 	a.mu.Lock()
-	state := ipAllocState{Allocated: a.allocated}
+	// Copy under the lock; marshalling the live map races Allocate.
+	snapshot := make(map[string]string, len(a.allocated))
+	for k, v := range a.allocated {
+		snapshot[k] = v
+	}
 	a.mu.Unlock()
+	state := ipAllocState{Allocated: snapshot}
 
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
@@ -205,6 +224,10 @@ func (a *IPAllocator) Load() error {
 	defer a.mu.Unlock()
 
 	for k, v := range state.Allocated {
+		// Drop allocations from a previous subnet and reserved addresses.
+		if !strings.HasPrefix(v, a.prefix+".") || a.usedIPs[v] {
+			continue
+		}
 		a.allocated[k] = v
 		a.usedIPs[v] = true
 	}

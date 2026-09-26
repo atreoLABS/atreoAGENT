@@ -2,8 +2,11 @@ package wireguard
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 )
 
@@ -233,4 +236,139 @@ func TestTryAdoptAcceptsFreeInSubnetAddressAndIsIdempotent(t *testing.T) {
 	if other == "100.64.0.50" {
 		t.Error("Allocate handed out an already-adopted IP")
 	}
+}
+
+func TestLoadDiscardsAllocationsFromAnotherSubnet(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ip_alloc.json")
+	if err := os.WriteFile(path, []byte(`{"allocated":{"oldpeer":"100.64.0.5","newpeer":"100.70.5.9"}}`), 0640); err != nil {
+		t.Fatal(err)
+	}
+	a, err := NewIPAllocator("100.70.5.0/24", "100.70.5.1", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := a.Lookup("oldpeer"); got != "" {
+		t.Errorf("kept %q from a previous subnet; the peer would get a route it cannot use", got)
+	}
+	if got := a.Lookup("newpeer"); got != "100.70.5.9" {
+		t.Errorf("dropped a valid allocation: %q", got)
+	}
+	ip, err := a.Allocate("oldpeer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(ip, "100.70.5.") {
+		t.Errorf("reallocated outside the current subnet: %q", ip)
+	}
+}
+
+func TestMarkUsedIgnoresOutOfPrefixIP(t *testing.T) {
+	a := newTestAllocator(t)
+	a.MarkUsed("peer1", "100.65.0.5")
+	if got := a.Lookup("peer1"); got != "" {
+		t.Errorf("MarkUsed kept out-of-prefix IP: %q", got)
+	}
+	ip, err := a.Allocate("peer1")
+	if err != nil {
+		t.Fatalf("Allocate: %v", err)
+	}
+	if !strings.HasPrefix(ip, "100.64.0.") {
+		t.Errorf("allocated outside subnet: %q", ip)
+	}
+}
+
+func TestMarkUsedIgnoresReservedAddress(t *testing.T) {
+	a := newTestAllocator(t)
+	a.MarkUsed("peer1", "100.64.0.1")
+	if got := a.Lookup("peer1"); got != "" {
+		t.Errorf("MarkUsed bound server gateway to peer: %q", got)
+	}
+	ip, err := a.Allocate("peer1")
+	if err != nil {
+		t.Fatalf("Allocate: %v", err)
+	}
+	if ip == "100.64.0.1" {
+		t.Error("allocated the server gateway")
+	}
+}
+
+func TestMarkUsedRejectsNonCanonicalAddress(t *testing.T) {
+	a := newTestAllocator(t)
+	// Accepting it would strand the peer: InSubnet rejects it, but Allocate
+	// would keep returning it for the known pubkey.
+	a.MarkUsed("peer1", "100.64.0.05")
+	if got := a.Lookup("peer1"); got != "" {
+		t.Errorf("MarkUsed accepted non-canonical IP: %q", got)
+	}
+	ip, err := a.Allocate("peer1")
+	if err != nil {
+		t.Fatalf("Allocate: %v", err)
+	}
+	if !strings.HasPrefix(ip, "100.64.0.") {
+		t.Errorf("allocated outside subnet: %q", ip)
+	}
+}
+
+func TestLoadSkipsReservedInPrefixAddress(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ip_alloc.json")
+	if err := os.WriteFile(path, []byte(`{"allocated":{"peer1":"100.70.5.1","peer2":"100.70.5.10"}}`), 0640); err != nil {
+		t.Fatal(err)
+	}
+	a, err := NewIPAllocator("100.70.5.0/24", "100.70.5.1", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := a.Lookup("peer1"); got != "" {
+		t.Errorf("kept server gateway allocation: %q", got)
+	}
+	if got := a.Lookup("peer2"); got != "100.70.5.10" {
+		t.Errorf("dropped valid allocation: %q", got)
+	}
+}
+
+func TestInSubnet(t *testing.T) {
+	a := newTestAllocator(t)
+	tests := []struct {
+		ip   string
+		want bool
+		desc string
+	}{
+		{"100.64.0.50", true, "canonical in-subnet"},
+		{"100.64.0.1", false, "server gateway (reserved)"},
+		{"100.64.0.0", false, "network address (reserved)"},
+		{"100.64.0.255", false, "broadcast (reserved)"},
+		{"100.65.0.5", false, "out-of-prefix"},
+		{"100.64.0.05", false, "non-canonical leading zero"},
+		{"::1", false, "IPv6"},
+		{"not-an-ip", false, "garbage"},
+		{"", false, "empty"},
+	}
+	for _, tt := range tests {
+		got := a.InSubnet(tt.ip)
+		if got != tt.want {
+			t.Errorf("InSubnet(%q) = %v, want %v (%s)", tt.ip, got, tt.want, tt.desc)
+		}
+	}
+}
+
+// Run with -race.
+func TestSaveConcurrentWithAllocate(t *testing.T) {
+	a := newTestAllocator(t)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			_, _ = a.Allocate(fmt.Sprintf("key%d", i))
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			_ = a.Save()
+		}
+	}()
+	wg.Wait()
 }

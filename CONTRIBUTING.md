@@ -28,7 +28,7 @@ we think it's right for the project.
 
 ## Development setup
 
-Requirements: Go 1.25+. Optional, for end-to-end testing: Docker and a Linux host with the WireGuard kernel module.
+Requirements: Go 1.27+. Optional, for end-to-end testing: Docker and a Linux host with the WireGuard kernel module.
 
 ```bash
 # Build

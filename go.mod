@@ -6,13 +6,13 @@ require (
 	filippo.io/edwards25519 v1.2.0
 	github.com/coder/websocket v1.8.15
 	github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6
-	github.com/emersion/go-smtp v0.25.0
+	github.com/emersion/go-smtp v0.26.0
 	github.com/go-acme/lego/v4 v4.35.2
-	github.com/huin/goupnp v1.3.0
+	github.com/huin/goupnp v1.3.1
 	github.com/jackpal/go-nat-pmp v1.1.0
 	github.com/jhillyerd/enmime/v2 v2.5.0
-	golang.org/x/crypto v0.58.0
-	golang.org/x/sys v0.49.0
+	golang.org/x/crypto v0.59.0
+	golang.org/x/sys v0.50.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -37,9 +37,9 @@ require (
 	github.com/olekukonko/tablewriter v1.1.4 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/ssor/bom v0.0.0-20170718123548-6386211fdfcf // indirect
-	golang.org/x/mod v0.41.0 // indirect
+	golang.org/x/mod v0.42.0 // indirect
 	golang.org/x/net v0.62.0 // indirect
-	golang.org/x/sync v0.24.0 // indirect
-	golang.org/x/text v0.43.0 // indirect
-	golang.org/x/tools v0.51.0 // indirect
+	golang.org/x/sync v0.25.0 // indirect
+	golang.org/x/text v0.44.0 // indirect
+	golang.org/x/tools v0.52.0 // indirect
 )
